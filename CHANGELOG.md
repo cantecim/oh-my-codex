@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+Snapshot of `main...dev` (2026-03-02): **50 files changed**, **+4,377 / -204**.
+
+### Added
+- Team role routing and decomposition plumbing (`src/team/role-router.ts`, `src/team/runtime-cli.ts`) plus new decomposition and role-router tests.
+- Dedicated MCP team server module (`src/mcp/team-server.ts`) with cleanup regression coverage.
+- Notify-hook visual verdict parser (`scripts/notify-hook/visual-verdict.js`) and test coverage for visual verdict behavior.
+- Team idle nudge helper (`src/team/idle-nudge.ts`) and supporting runtime wiring.
+- OpenClaw integration guide (`docs/openclaw-integration.md`).
+
+### Changed
+- CI workflow updates in `.github/workflows/ci.yml`, including stronger aggregate status gating.
+- Team runtime/skill documentation updates (`README.md`, `skills/team/SKILL.md`).
+- Notification and OpenClaw configuration/type surfaces refreshed (`src/notifications/*`, `src/openclaw/*`).
+
+### Fixed
+- Team pane/session targeting, autoscaling cleanup, and shutdown/resume reliability issues across `src/team/*` and notify-hook dispatch paths.
+- Tmux injection regressions when panes return to shell and scoped mode state is missing.
+- Team/ralph CLI edge cases and unused symbol cleanup in review-followup fixes.
+
+### Tests
+- Added/expanded regression suites for team decomposition, role routing, runtime CLI, visual verdict parsing, and MCP team cleanup.
+
 ## [0.7.3] - 2026-02-28
 
 55 files changed. Pipeline orchestrator, uninstall command, team dispatch hardening, and config idempotency.
