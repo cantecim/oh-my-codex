@@ -12,6 +12,8 @@ const ROOT_TEMPLATE_PATTERNS = [
   rx('compact, information-dense responses'),
   rx('clear, low-risk, reversible next steps'),
   rx('local overrides?.*non-conflicting instructions'),
+  rx('Outside active `team`/`swarm` mode, use `executor`'),
+  rx('Reserve `worker` strictly for active `team`/`swarm` sessions'),
   rx('do not skip prerequisites|task is grounded and verified'),
   rx('concise evidence summaries'),
 ];

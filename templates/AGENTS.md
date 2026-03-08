@@ -48,6 +48,8 @@ Work directly only for trivial operations where delegation adds disproportionate
 - Small clarifications, quick status checks, or single-command sequential operations.
 
 For substantive code changes, delegate to `executor` (default for both standard and complex implementation work).
+Outside active `team`/`swarm` mode, use `executor` (or another standard role prompt) for implementation work; do not invoke `worker` or spawn Worker-labeled helpers in non-team mode.
+Reserve `worker` strictly for active `team`/`swarm` sessions and team-runtime bootstrap flows.
 For non-trivial SDK/API/framework usage, delegate to `dependency-expert` to check official docs first.
 </delegation_rules>
 
@@ -80,6 +82,7 @@ Key constraints:
 - Each child has its own context window (not shared with parent)
 - Parent must read prompt file BEFORE calling spawn_agent
 - Child agents can access skills ($name) but should focus on their assigned role
+- `worker` is a team-runtime surface, not a general-purpose child role; outside active `team`/`swarm` mode, never substitute `worker` for `executor`
 - Child role prompts should report recommended handoffs upward instead of recursively orchestrating unless the parent explicitly authorizes recursion
 </child_agent_protocol>
 
