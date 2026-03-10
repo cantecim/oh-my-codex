@@ -116,6 +116,10 @@ if [[ "$cmd" == "display-message" ]]; then
     pwd
     exit 0
   fi
+  if [[ "$fmt" == "#{pane_current_command}" ]]; then
+    echo "codex"
+    exit 0
+  fi
   if [[ "$fmt" == "#S" ]]; then
     echo "session-test"
     exit 0
@@ -441,6 +445,131 @@ describe('notify-fallback watcher', () => {
       const request = await readDispatchRequest('dispatch-team', queued.request.request_id, wd);
       assert.equal(request?.status, 'pending');
       assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('sends bounded periodic Ralph continue steer while Ralph state stays active', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-active-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const statePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
+    try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(join(wd, '.omx', 'state', 'ralph-state.json'), JSON.stringify({
+        active: true,
+        current_phase: 'executing',
+        tmux_pane_id: '%42',
+      }, null, 2));
+
+      const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+      const env = {
+        ...process.env,
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+      };
+
+      const first = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(first.status, 0, first.stderr || first.stdout);
+
+      const second = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(second.status, 0, second.stderr || second.stdout);
+
+      const boundedLog = await readFile(tmuxLogPath, 'utf8');
+      let sends = boundedLog.match(/send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/g) || [];
+      assert.equal(sends.length, 1, 'cadence should suppress a second Ralph steer inside 60s');
+
+      const watcherState = JSON.parse(await readFile(statePath, 'utf-8'));
+      watcherState.ralph_continue_steer.last_sent_at = new Date(Date.now() - 61_000).toISOString();
+      await writeFile(statePath, JSON.stringify(watcherState, null, 2));
+
+      const third = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(third.status, 0, third.stderr || third.stdout);
+
+      const finalLog = await readFile(tmuxLogPath, 'utf8');
+      sends = finalLog.match(/send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/g) || [];
+      assert.equal(sends.length, 2, 'Ralph steer should fire again once the 60s cadence elapses');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('stops Ralph continue steer immediately once Ralph state is terminal or cleared', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-terminal-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const stateDir = join(wd, '.omx', 'state');
+    const watcherStatePath = join(stateDir, 'notify-fallback-state.json');
+    const ralphStatePath = join(stateDir, 'ralph-state.json');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(ralphStatePath, JSON.stringify({
+        active: true,
+        current_phase: 'executing',
+        tmux_pane_id: '%42',
+      }, null, 2));
+
+      const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+      const env = {
+        ...process.env,
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+      };
+
+      const first = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(first.status, 0, first.stderr || first.stdout);
+
+      const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
+      watcherState.ralph_continue_steer.last_sent_at = new Date(Date.now() - 61_000).toISOString();
+      await writeFile(watcherStatePath, JSON.stringify(watcherState, null, 2));
+      await writeFile(ralphStatePath, JSON.stringify({
+        active: false,
+        current_phase: 'complete',
+        completed_at: new Date().toISOString(),
+        tmux_pane_id: '%42',
+      }, null, 2));
+
+      const terminalRun = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(terminalRun.status, 0, terminalRun.stderr || terminalRun.stdout);
+
+      await rm(ralphStatePath, { force: true });
+      const clearedRun = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(clearedRun.status, 0, clearedRun.stderr || clearedRun.stdout);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+      const sends = tmuxLog.match(/send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/g) || [];
+      assert.equal(sends.length, 1, 'terminal/cleared Ralph state must stop additional periodic steer sends');
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

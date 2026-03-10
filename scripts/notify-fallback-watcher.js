@@ -6,6 +6,9 @@ import { spawnSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
+import { resolveNudgePaneTarget } from './notify-hook/auto-nudge.js';
+import { checkPaneReadyForTeamSendKeys } from './notify-hook/team-tmux-guard.js';
+import { DEFAULT_MARKER } from './tmux-hook-engine.js';
 
 function argValue(name, fallback = '') {
   const idx = process.argv.indexOf(name);
@@ -56,6 +59,9 @@ const stateDir = join(omxDir, 'state');
 const statePath = join(stateDir, 'notify-fallback-state.json');
 const pidFilePath = resolve(argValue('--pid-file', join(stateDir, 'notify-fallback.pid')));
 const logPath = join(logsDir, `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
+const RALPH_CONTINUE_TEXT = 'Ralph loop active continue';
+const RALPH_CONTINUE_CADENCE_MS = 60_000;
+const RALPH_TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 const fileState = new Map();
 const seenTurnKeys = new Set();
@@ -69,9 +75,169 @@ let lastDispatchDrain = {
   last_result: null,
   last_error: null,
 };
+let lastRalphContinueSteer = {
+  enabled: true,
+  cadence_ms: RALPH_CONTINUE_CADENCE_MS,
+  message: RALPH_CONTINUE_TEXT,
+  active: false,
+  last_state_check_at: null,
+  last_sent_at: '',
+  last_reason: 'init',
+  state_path: '',
+  pane_id: '',
+  pane_current_command: '',
+  current_phase: '',
+};
 
 function eventLog(event) {
   return appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
+}
+
+function normalizeRalphContinueSteerState(raw) {
+  if (!raw || typeof raw !== 'object') return { ...lastRalphContinueSteer };
+  return {
+    enabled: raw.enabled !== false,
+    cadence_ms: Number.isFinite(raw.cadence_ms) && raw.cadence_ms > 0 ? raw.cadence_ms : RALPH_CONTINUE_CADENCE_MS,
+    message: safeString(raw.message) || RALPH_CONTINUE_TEXT,
+    active: raw.active === true,
+    last_state_check_at: safeString(raw.last_state_check_at) || null,
+    last_sent_at: safeString(raw.last_sent_at),
+    last_reason: safeString(raw.last_reason) || 'init',
+    state_path: safeString(raw.state_path),
+    pane_id: safeString(raw.pane_id),
+    pane_current_command: safeString(raw.pane_current_command),
+    current_phase: safeString(raw.current_phase),
+  };
+}
+
+function hasRalphTerminalState(raw) {
+  if (!raw || typeof raw !== 'object') return true;
+  if (raw.active !== true) return true;
+  const phase = safeString(raw.current_phase).trim().toLowerCase();
+  if (phase && RALPH_TERMINAL_PHASES.has(phase)) return true;
+  if (safeString(raw.completed_at).trim()) return true;
+  return false;
+}
+
+async function loadPersistedWatcherState() {
+  const persisted = await readFile(statePath, 'utf-8')
+    .then((content) => JSON.parse(content))
+    .catch(() => null);
+  lastRalphContinueSteer = normalizeRalphContinueSteerState(persisted?.ralph_continue_steer);
+}
+
+async function resolveActiveRalphState() {
+  const candidateDirs = [];
+  const sessionPath = join(stateDir, 'session.json');
+  try {
+    const session = JSON.parse(await readFile(sessionPath, 'utf-8'));
+    const sessionId = safeString(session?.session_id).trim();
+    if (sessionId) {
+      candidateDirs.push(join(stateDir, 'sessions', sessionId));
+    }
+  } catch {
+    // No active session file; fall back to root state only.
+  }
+  if (!candidateDirs.includes(stateDir)) candidateDirs.push(stateDir);
+
+  for (const dir of candidateDirs) {
+    const path = join(dir, 'ralph-state.json');
+    if (!existsSync(path)) continue;
+    const parsed = await readFile(path, 'utf-8')
+      .then((content) => JSON.parse(content))
+      .catch(() => null);
+    if (!parsed || typeof parsed !== 'object') continue;
+    if (hasRalphTerminalState(parsed)) {
+      return {
+        active: false,
+        reason: 'terminal',
+        path,
+        state: parsed,
+      };
+    }
+    return {
+      active: true,
+      reason: 'active',
+      path,
+      state: parsed,
+    };
+  }
+
+  return {
+    active: false,
+    reason: 'cleared',
+    path: '',
+    state: null,
+  };
+}
+
+async function emitRalphContinueSteer(paneId, message) {
+  const markedText = `${message} ${DEFAULT_MARKER}`;
+  await new Promise((resolve) => {
+    const typed = spawnSync('tmux', ['send-keys', '-t', paneId, '-l', markedText], { encoding: 'utf-8' });
+    if (typed.status !== 0) throw new Error((typed.stderr || typed.stdout || '').trim() || 'tmux send-keys failed');
+    setTimeout(resolve, 100);
+  });
+  await new Promise((resolve) => {
+    const submitA = spawnSync('tmux', ['send-keys', '-t', paneId, 'C-m'], { encoding: 'utf-8' });
+    if (submitA.status !== 0) throw new Error((submitA.stderr || submitA.stdout || '').trim() || 'tmux send-keys C-m failed');
+    setTimeout(resolve, 100);
+  });
+  const submitB = spawnSync('tmux', ['send-keys', '-t', paneId, 'C-m'], { encoding: 'utf-8' });
+  if (submitB.status !== 0) {
+    throw new Error((submitB.stderr || submitB.stdout || '').trim() || 'tmux send-keys C-m failed');
+  }
+}
+
+async function runRalphContinueSteerTick() {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const activeRalph = await resolveActiveRalphState();
+  lastRalphContinueSteer = {
+    ...lastRalphContinueSteer,
+    active: activeRalph.active,
+    current_phase: safeString(activeRalph.state?.current_phase),
+    last_state_check_at: nowIso,
+    last_reason: activeRalph.reason,
+    state_path: activeRalph.path,
+    pane_current_command: '',
+  };
+
+  if (!activeRalph.active) return;
+
+  const lastSentMs = Date.parse(lastRalphContinueSteer.last_sent_at);
+  if (Number.isFinite(lastSentMs) && now - lastSentMs < RALPH_CONTINUE_CADENCE_MS) {
+    lastRalphContinueSteer.last_reason = 'cooldown';
+    return;
+  }
+
+  const paneId = safeString(activeRalph.state?.tmux_pane_id).trim() || await resolveNudgePaneTarget(stateDir);
+  if (!paneId) {
+    lastRalphContinueSteer.last_reason = 'pane_missing';
+    lastRalphContinueSteer.pane_id = '';
+    return;
+  }
+
+  const paneGuard = await checkPaneReadyForTeamSendKeys(paneId);
+  lastRalphContinueSteer.pane_id = paneId;
+  lastRalphContinueSteer.pane_current_command = paneGuard.paneCurrentCommand || '';
+  if (!paneGuard.ok) {
+    lastRalphContinueSteer.last_reason = paneGuard.reason || 'pane_guard_blocked';
+    return;
+  }
+
+  await emitRalphContinueSteer(paneId, RALPH_CONTINUE_TEXT);
+  lastRalphContinueSteer.last_sent_at = nowIso;
+  lastRalphContinueSteer.last_reason = 'sent';
+  await eventLog({
+    type: 'ralph_continue_steer',
+    reason: 'sent',
+    pane_id: paneId,
+    state_path: activeRalph.path,
+    current_phase: safeString(activeRalph.state?.current_phase) || null,
+    cadence_ms: RALPH_CONTINUE_CADENCE_MS,
+    message: RALPH_CONTINUE_TEXT,
+  });
 }
 
 async function readPidFilePid(path) {
@@ -150,6 +316,12 @@ async function writeState(extra = {}) {
       max_per_tick: dispatchTickMax,
       run_count: dispatchDrainRuns,
       ...lastDispatchDrain,
+    },
+    ralph_continue_steer: {
+      ...lastRalphContinueSteer,
+      enabled: true,
+      cadence_ms: RALPH_CONTINUE_CADENCE_MS,
+      message: RALPH_CONTINUE_TEXT,
     },
     ...extra,
   };
@@ -383,6 +555,7 @@ async function tick() {
   await ensureTrackedFiles();
   await pollFiles();
   await runDispatchDrainTick();
+  await runRalphContinueSteerTick();
   await writeState();
   if (await enforceLifecycleGuards()) return;
   setTimeout(() => {
@@ -403,6 +576,7 @@ async function main() {
   }
 
   await registerPidFile();
+  await loadPersistedWatcherState();
   await eventLog({
     type: 'watcher_start',
     cwd,
@@ -423,6 +597,7 @@ async function main() {
     await ensureTrackedFiles();
     await pollFiles();
     await runDispatchDrainTick();
+    await runRalphContinueSteerTick();
     await writeState();
     await eventLog({ type: 'watcher_once_complete', seen_turns: seenTurnKeys.size });
     process.exit(0);
