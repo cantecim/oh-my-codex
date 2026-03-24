@@ -118,6 +118,17 @@ After the initial evidence pass, pressure-test with these lenses when relevant:
 - **Premortem lens** — assume the current best explanation is wrong; what failure mode would embarrass the trace later?
 - **Science lens** — controls, confounders, measurement bias, falsifiable predictions
 
+## Execution policy
+
+- Default to concise, evidence-dense progress and completion reporting unless the user or risk level requires more detail
+- Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints
+- If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the analysis is grounded
+- Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent
+
+**Good:** The user says `continue` after the workflow already has a clear next step. Continue the current branch of work instead of restarting or re-asking the same question.
+
+**Good:** The user changes only the output shape or downstream delivery step. Preserve earlier non-conflicting workflow constraints and apply the update locally.
+
 ## Execution steps
 
 1. **Identify the analysis type**: Architecture, bug investigation, performance, or dependency analysis
