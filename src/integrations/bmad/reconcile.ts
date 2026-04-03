@@ -40,6 +40,30 @@ export async function readPersistedBmadArtifactIndex(
   return readJsonFile<BmadArtifactIndex>(getBmadArtifactIndexPath(projectRoot));
 }
 
+export async function writePersistedBmadIntegrationState(
+  projectRoot: string,
+  state: BmadPersistedState,
+): Promise<void> {
+  const integrationDir = getIntegrationStateDir(projectRoot);
+  await mkdir(integrationDir, { recursive: true });
+  await writeFile(getBmadStatePath(projectRoot), JSON.stringify(state, null, 2));
+}
+
+export async function persistBmadActiveSelection(
+  projectRoot: string,
+  selection: { activeStoryRef: string | null; activeEpicRef: string | null },
+): Promise<BmadPersistedState | null> {
+  const state = await readPersistedBmadIntegrationState(projectRoot);
+  if (!state) return null;
+  const nextState: BmadPersistedState = {
+    ...state,
+    activeStoryRef: selection.activeStoryRef,
+    activeEpicRef: selection.activeEpicRef,
+  };
+  await writePersistedBmadIntegrationState(projectRoot, nextState);
+  return nextState;
+}
+
 function trimLog<T>(entries: readonly T[]): T[] {
   return entries.slice(-MAX_LOG_ENTRIES);
 }

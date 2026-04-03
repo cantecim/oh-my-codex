@@ -30,3 +30,15 @@ export { createTeamExecStage, buildTeamInstruction } from './stages/team-exec.js
 export type { TeamExecStageOptions, TeamExecDescriptor } from './stages/team-exec.js';
 export { createRalphVerifyStage, buildRalphInstruction } from './stages/ralph-verify.js';
 export type { RalphVerifyStageOptions, RalphVerifyDescriptor } from './stages/ralph-verify.js';
+export {
+  runBmadAutopilotCampaign,
+  runAutopilotWithRouting,
+} from './bmad-autopilot.js';
+export type {
+  BmadAutopilotCampaignResult,
+  BmadAutopilotExecutorResult,
+  BmadAutopilotExecutors,
+  BmadPlanningRecommendation,
+  RunAutopilotWithRoutingOptions,
+  RunBmadAutopilotCampaignOptions,
+} from './bmad-autopilot.js';

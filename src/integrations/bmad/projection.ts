@@ -20,6 +20,16 @@ function inferActiveRef(paths: readonly string[]): string | null {
   return paths.length === 1 ? paths[0] : null;
 }
 
+function preserveActiveRef(
+  paths: readonly string[],
+  previousRef: string | null | undefined,
+): string | null {
+  if (previousRef && paths.includes(previousRef)) {
+    return previousRef;
+  }
+  return inferActiveRef(paths);
+}
+
 export function classifyBmadDrift(
   index: BmadArtifactIndex,
   previousState?: Pick<BmadPersistedState, 'detected' | 'artifactIndexVersion'> | null,
@@ -75,8 +85,8 @@ export function deriveBmadProjection(
     phase: inferPhase(index),
     planningReadiness,
     implementationReadiness,
-    activeEpicRef: inferActiveRef(index.epicPaths),
-    activeStoryRef: inferActiveRef(index.storyPaths),
+    activeEpicRef: preserveActiveRef(index.epicPaths, previousState?.activeEpicRef),
+    activeStoryRef: preserveActiveRef(index.storyPaths, previousState?.activeStoryRef),
     artifactIndexVersion: index.artifactIndexVersion,
     lastReconciledAt: new Date().toISOString(),
     driftStatus,
