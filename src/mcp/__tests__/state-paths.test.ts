@@ -10,6 +10,11 @@ import {
   getBaseStateDir,
   getAllSessionScopedStateDirs,
   getAllSessionScopedStatePaths,
+  getBmadArtifactIndexPath,
+  getBmadDriftLogPath,
+  getBmadReconcileLogPath,
+  getBmadStatePath,
+  getIntegrationStateDir,
   resolveWorkingDirectoryForState,
   getStateDir,
   getStatePath,
@@ -98,6 +103,20 @@ describe('state paths', () => {
     assert.equal(base, '/repo/.omx/state');
     assert.equal(getStateDir('/repo'), '/repo/.omx/state');
     assert.equal(getStatePath('team', '/repo'), '/repo/.omx/state/team-state.json');
+    assert.equal(getIntegrationStateDir('/repo'), '/repo/.omx/state/integrations');
+    assert.equal(getBmadStatePath('/repo'), '/repo/.omx/state/integrations/bmad.json');
+    assert.equal(
+      getBmadArtifactIndexPath('/repo'),
+      '/repo/.omx/state/integrations/bmad-artifact-index.json',
+    );
+    assert.equal(
+      getBmadReconcileLogPath('/repo'),
+      '/repo/.omx/state/integrations/bmad-reconcile-log.json',
+    );
+    assert.equal(
+      getBmadDriftLogPath('/repo'),
+      '/repo/.omx/state/integrations/bmad-drift-log.json',
+    );
   });
 
   it('builds session state paths', () => {

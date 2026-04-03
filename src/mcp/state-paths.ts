@@ -146,6 +146,26 @@ export function getBaseStateDir(workingDirectory?: string): string {
   return join(resolveWorkingDirectoryForState(workingDirectory), '.omx', 'state');
 }
 
+export function getIntegrationStateDir(workingDirectory?: string): string {
+  return join(getBaseStateDir(workingDirectory), 'integrations');
+}
+
+export function getBmadStatePath(workingDirectory?: string): string {
+  return join(getIntegrationStateDir(workingDirectory), 'bmad.json');
+}
+
+export function getBmadArtifactIndexPath(workingDirectory?: string): string {
+  return join(getIntegrationStateDir(workingDirectory), 'bmad-artifact-index.json');
+}
+
+export function getBmadReconcileLogPath(workingDirectory?: string): string {
+  return join(getIntegrationStateDir(workingDirectory), 'bmad-reconcile-log.json');
+}
+
+export function getBmadDriftLogPath(workingDirectory?: string): string {
+  return join(getIntegrationStateDir(workingDirectory), 'bmad-drift-log.json');
+}
+
 export function getStateDir(workingDirectory?: string, sessionId?: string): string {
   const base = getBaseStateDir(workingDirectory);
   return sessionId ? join(base, 'sessions', sessionId) : base;
