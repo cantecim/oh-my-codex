@@ -9,6 +9,8 @@ Your previous attempt did not output the completion promise. Continue working on
 
 <Purpose>
 Ralph is a persistence loop that keeps working on a task until it is fully complete and architect-verified. It wraps ultrawork's parallel execution with session persistence, automatic retry on failure, and mandatory verification before completion.
+
+When BMAD artifacts are present, Ralph also acts as a **story-scoped BMAD executor**: it binds to the resolved BMAD story context, treats BMAD acceptance criteria as additional completion guidance, and performs only bounded BMAD writeback on successful completion.
 </Purpose>
 
 <Use_When>
@@ -39,6 +41,15 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints
 - If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the execution loop is grounded
 - Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent
+- If BMAD is detected, load BMAD execution context before implementation.
+- Use the resolved BMAD story and epic context when available; if BMAD story resolution is ambiguous, do not guess a story-specific target.
+- Treat BMAD artifact files as delivery truth and Ralph state as additive runtime projection only.
+- Treat extracted BMAD acceptance criteria as additive completion guidance, not as a replacement for fresh verification evidence.
+- BMAD writeback is bounded to:
+  - story artifact completion block
+  - sprint-status update when conservative mapping is possible
+  - implementation summaries under `_bmad-output/implementation-artifacts/`
+- Never mutate BMAD PRD, UX, architecture, or `project-context.md`.
 </Execution_Policy>
 
 <Steps>
@@ -56,6 +67,18 @@ Complex tasks often fail silently: partial implementations get declared "done", 
    - Do not begin Ralph execution work (delegation, implementation, or verification loops) until snapshot grounding exists. If forced to proceed quickly, note explicit risk tradeoffs.
 1. **Review progress**: Check TODO list and any prior iteration state
 2. **Continue from where you left off**: Pick up incomplete tasks
+2.5 **BMAD context gate (when BMAD is detected)**:
+   - Reconcile BMAD integration state
+   - Resolve execution context:
+     - project-context path
+     - architecture paths
+     - active story path
+     - active epic path
+     - sprint status path
+     - implementation artifacts root
+     - acceptance criteria
+   - If exactly one story is resolved, bind Ralph to that story
+   - If story resolution is ambiguous, record the ambiguity in Ralph state and do not invent a story-specific writeback target
 3. **Delegate in parallel**: Route tasks to specialist agents at appropriate tiers
    - Simple lookups: LOW tier -- "What does this function return?"
    - Standard work: STANDARD tier -- "Add error handling to this module"
@@ -89,6 +112,9 @@ Complex tasks often fail silently: partial implementations get declared "done", 
    - Do not proceed to completion until post-deslop regression is green (unless `--no-deslop` explicitly skipped the deslop pass).
 8. **On approval**: Run `/cancel` to cleanly exit and clean up all state files
 9. **On rejection**: Fix the issues raised, then re-verify at the same tier
+10. **BMAD completion writeback (when supported)**:
+   - After successful completion, perform bounded BMAD writeback for the current story only
+   - Treat writeback drift/ambiguity as a stop condition for BMAD-side completion, not as permission to rewrite broader BMAD artifacts
 </Steps>
 
 <Tool_Usage>
@@ -98,6 +124,20 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - If ToolSearch finds no MCP tools or Codex is unavailable, proceed with architect agent verification alone -- never block on external tools
 - Use `state_write` / `state_read` for ralph mode state persistence between iterations
 - Persist context snapshot path in Ralph mode state so later phases and agents share the same grounding context
+- When BMAD is present, persist additive state alongside normal Ralph lifecycle updates, for example:
+  `state_write({mode: "ralph", current_phase: "executing", state: {bmad_detected: true, bmad_story_path: "<story-path>", bmad_epic_path: "<epic-path>", bmad_sprint_status_path: "<sprint-status-path>"}})`
+
+  Typical additive BMAD fields include:
+  - `bmad_detected`
+  - `bmad_phase`
+  - `bmad_story_path`
+  - `bmad_epic_path`
+  - `bmad_sprint_status_path`
+  - `bmad_acceptance_criteria`
+  - `bmad_context_blocked_by_ambiguity`
+  - `bmad_writeback_supported`
+  - `bmad_writeback_blocked`
+  - `bmad_implementation_artifacts_root`
 </Tool_Usage>
 
 ## State Management
@@ -181,6 +221,7 @@ Why bad: These are independent tasks that should run in parallel, not sequential
 - [ ] Architect verification passed (STANDARD tier minimum)
 - [ ] ai-slop-cleaner pass completed on changed files (or --no-deslop specified)
 - [ ] Post-deslop regression tests pass
+- [ ] If BMAD was active: bounded BMAD writeback completed or was explicitly blocked and reported
 - [ ] `/cancel` run for clean state cleanup
 </Final_Checklist>
 

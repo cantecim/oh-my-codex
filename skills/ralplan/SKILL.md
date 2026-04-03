@@ -7,6 +7,8 @@ description: Alias for $plan --consensus
 
 Ralplan is a shorthand alias for `$plan --consensus`. It triggers iterative planning with Planner, Architect, and Critic agents until consensus is reached, with **RALPLAN-DR structured deliberation** (short mode by default, deliberate mode for high-risk work).
 
+In BMAD-backed repos, Ralplan also serves as a **BMAD readiness and gap gate**. It should detect existing BMAD artifacts, decide whether execution is already safe, and hand off to execution modes without recreating BMAD’s long authoring workflows.
+
 ## Usage
 
 ```
@@ -62,6 +64,33 @@ The consensus workflow:
 7. *(--interactive only)* User chooses: Approve (ralph or team), Request changes, or Reject
 8. *(--interactive only)* On approval: invoke `$ralph` for sequential execution or `$team` for parallel team execution with the explicit available-agent-types roster, reasoning-by-lane guidance, role/staffing allocation guidance, launch hints, and verification-path guidance from the approved plan -- never implement directly
 
+### BMAD-aware behavior
+
+When BMAD is detected:
+- reconcile BMAD integration state before planning or handoff
+- treat BMAD artifacts as delivery truth and Ralplan state/artifacts as additive runtime/handoff metadata
+- derive BMAD readiness from:
+  - PRD presence
+  - architecture presence
+  - story/sprint artifacts
+  - drift status
+- annotate Ralplan state/artifacts with:
+  - `bmad_detected`
+  - `bmad_phase`
+  - `bmad_ready_for_execution`
+  - `bmad_gap_summary`
+  - `bmad_active_story_path`
+  - `bmad_active_epic_path`
+  - `bmad_sprint_status_path`
+  - `bmad_context_blocked_by_ambiguity`
+  - `bmad_writeback_supported`
+- if BMAD planning is incomplete:
+  - recommend the missing BMAD workflow category next
+  - do not synthesize BMAD PRD / architecture / story authoring directly inside Ralplan
+- if BMAD planning is sufficient:
+  - produce an execution handoff context for `$ralph`, `$team`, and later `$autopilot`
+- in BMAD mode, Ralplan is a gate and handoff planner first, not a replacement for BMAD’s menu-driven authoring workflows
+
 > **Important:** Steps 3 and 4 MUST run sequentially. Do NOT issue both agent calls in the same parallel batch. Always await the Architect result before invoking Critic.
 
 Follow the Plan skill's full documentation for consensus mode details.
@@ -94,6 +123,7 @@ The ralplan-first gate intercepts underspecified execution requests and redirect
 - **Test specification**: Acceptance criteria are testable before code is written
 - **Consensus**: Planner, Architect, and Critic agree on the approach
 - **No wasted execution**: Agents start with a clear, bounded task
+- **BMAD-aware handoff**: When BMAD artifacts already provide the necessary boundary, Ralplan can hand off directly instead of regenerating planning
 
 ### Good vs Bad Prompts
 

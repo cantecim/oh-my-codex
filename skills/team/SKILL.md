@@ -7,6 +7,8 @@ description: N coordinated agents on shared task list using tmux-based orchestra
 
 `$team` is the tmux-based parallel execution mode for OMX. It starts real worker Codex and/or Claude CLI sessions in split panes and coordinates them through `.omx/state/team/...` files plus CLI team interop (`omx team api ...`) and state files.
 
+When BMAD artifacts are present, Team becomes a **BMAD-aware implementation executor**: the leader resolves shared BMAD context once, injects that context into worker instructions, and keeps BMAD writeback bounded to implementation-side artifacts only.
+
 This skill is operationally sensitive. Treat it as an operator workflow, not a generic prompt pattern.
 
 ## Team vs Native Subagents
@@ -31,6 +33,7 @@ When user triggers `$team`, the agent must:
 3. Verify startup and surface concrete state/pane evidence
 4. Keep team state alive until workers are terminal (unless explicit abort)
 5. Handle cleanup and stale-pane recovery when needed
+6. When BMAD is detected, inject shared BMAD story/epic/context metadata into worker instructions rather than letting each worker guess independently
 
 If `omx team` is unavailable, stop with a hard error.
 
@@ -146,8 +149,17 @@ When `$team` is used as a follow-up mode from ralplan, carry forward the approve
    - worker CLI selected by `OMX_TEAM_WORKER_CLI` / `OMX_TEAM_WORKER_CLI_MAP` (`codex` or `claude`)
    - optional worktree metadata envs when `--worktree` is used
 7. Wait for worker readiness (`capture-pane` polling)
-8. Write per-worker `inbox.md` and trigger via `tmux send-keys`
+8. Write per-worker `inbox.md` and use a startup trigger so workers notice the new inbox state
 9. Return control to leader; follow-up uses `status` / `resume` / `shutdown`
+10. When BMAD is detected, leader resolves once and persists additive BMAD metadata into team mode state and worker overlays:
+   - BMAD detected flag
+   - active story path when uniquely resolved
+   - active epic path when resolved
+   - project-context path
+   - architecture paths
+   - acceptance criteria summary
+   - sprint status path
+   - implementation artifacts root
 
 Important:
 
@@ -164,6 +176,26 @@ Important:
 - Trigger submit differs by CLI:
   - Codex may use queue-first `Tab` on busy panes (strategy-dependent).
   - Claude always uses direct Enter-only (`C-m`) rounds (never queue-first `Tab`).
+- BMAD worker guidance is shared-context only:
+  - workers should not infer or change BMAD planning artifacts
+  - workers should use the injected BMAD context as execution constraints
+  - bounded BMAD writeback happens only after successful execution/review checkpoints
+
+Startup note:
+- Team bootstrap may still use a narrow pane-level startup trigger after durable inbox/state files are written.
+- That bootstrap exception does **not** change the normal dispatch contract below: after startup, message/task delivery should remain CLI-first and state-first rather than ad-hoc pane typing.
+
+### BMAD-Specific Execution Contract
+
+When BMAD is active:
+- treat the resolved story as the execution unit
+- use BMAD acceptance criteria as additional completion guidance
+- do not mutate BMAD PRD, UX, architecture, or `project-context.md`
+- allowed BMAD-side writes are limited to:
+  - story completion block
+  - sprint-status update when conservative mapping succeeds
+  - OMX implementation summaries under `_bmad-output/implementation-artifacts/`
+- if BMAD story context is ambiguous, surface that ambiguity in leader-visible state instead of assigning different guesses to workers
 
 ### Team worker model + thinking resolution (current contract)
 
@@ -205,6 +237,9 @@ Follow this exact lifecycle when running `$team`:
 4. Only then run `omx team shutdown <team>`
 5. Verify shutdown evidence and state cleanup
 
+If BMAD is active, add one more shutdown requirement:
+6. Confirm that bounded BMAD implementation-side writeback either succeeded or was explicitly blocked/reported
+
 Do not run `shutdown` while workers are actively writing updates unless user explicitly requested abort/cancel.
 Do not treat ad-hoc pane typing as primary control flow when runtime/state evidence is available.
 
@@ -226,7 +261,7 @@ If the leader gets a stale/team-stalled nudge, immediately run `omx team status 
 
 To avoid brittle behavior, **message/task delivery must not be driven by ad-hoc tmux typing**.
 
-Required default path:
+Required default path after startup bootstrap:
 
 1. Use `omx team ...` runtime lifecycle commands for orchestration.
 2. Use `omx team api ... --json` for mailbox/task mutations.
@@ -234,10 +269,10 @@ Required default path:
 
 Strict rules:
 
-- **MUST NOT** use direct `tmux send-keys` as the primary mechanism to deliver instructions/messages.
+- **MUST NOT** use direct `tmux send-keys` as the primary ongoing mechanism to deliver instructions/messages.
 - **MUST NOT** spam Enter/trigger keys without first checking runtime/state evidence.
 - **MUST** prefer durable state writes + runtime dispatch (`dispatch/requests.json`, mailbox, inbox).
-- Direct tmux interaction is **fallback-only** and only after failure checks (for example `worker_notify_failed:<worker>`) or explicit user request (for example “press enter”).
+- Direct tmux interaction is **fallback-only** after startup, and only after failure checks (for example `worker_notify_failed:<worker>`) or explicit user request (for example “press enter”).
 
 ## Operational Commands
 
@@ -309,7 +344,7 @@ omx team api transition-task-status --input '{"team_name":"my-team","task_id":"1
 Leader-to-worker:
 
 - Write full assignment to worker `inbox.md`
-- Send short trigger (<200 chars) with `tmux send-keys`
+- During startup bootstrap or explicit fallback only, send a short trigger (<200 chars) so the worker notices the updated inbox state
 
 Worker-to-leader:
 
@@ -359,7 +394,7 @@ Useful runtime env vars:
 - `OMX_TEAM_LEADER_NUDGE_MS`
   - Leader nudge interval in ms (default 120000)
 - `OMX_TEAM_STRICT_SUBMIT=1`
-  - Force strict send-keys submit failure behavior
+  - Force strict startup/fallback trigger-submit failure behavior
 
 ## Failure Modes and Diagnosis
 

@@ -5,6 +5,10 @@ description: Full autonomous execution from idea to working code
 
 <Purpose>
 Autopilot takes a brief product idea and autonomously handles the full lifecycle: requirements analysis, technical design, planning, parallel implementation, QA cycling, and multi-perspective validation. It produces working, verified code from a 2-3 line description.
+
+When a project is BMAD-backed and already execution-ready, Autopilot also has a **BMAD campaign mode**: instead of re-running ideation/planning, it consumes BMAD artifacts, resolves the next executable story conservatively, and runs a bounded story-by-story implementation campaign until the currently discoverable backlog is exhausted or a stop condition is hit.
+
+This current BMAD slice is implementation-campaign focused. It does not imply that the full non-BMAD Autopilot phase stack (separate expansion/planning/QA/validation phases) is replayed verbatim inside BMAD campaign mode.
 </Purpose>
 
 <Use_When>
@@ -39,6 +43,12 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 - Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints
 - If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the workflow is grounded
 - Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent
+- If BMAD is detected, do not invent or rewrite BMAD planning artifacts. Use BMAD artifacts as delivery truth and OMX state as runtime truth.
+- If BMAD is detected, run the BMAD routing gate before entering the standard non-BMAD phase stack; do not start expansion/planning-heavy authoring first and "switch later."
+- In BMAD campaign mode, execute one story at a time by default.
+- In BMAD campaign mode, default backend is `$ralph`; use `$team` only when parallel execution is explicitly selected or when explicit runtime configuration/metadata marks it safe.
+- In BMAD campaign mode, never guess the active story when multiple candidates remain unresolved; stop and report ambiguity instead.
+- In BMAD campaign mode, do not write BMAD story/sprint artifacts directly; delegate bounded writeback to `$ralph` or `$team`, then re-read BMAD artifacts to confirm completion.
 </Execution_Policy>
 
 <Steps>
@@ -55,34 +65,64 @@ Most non-trivial software tasks require coordinated phases: understanding requir
    - If ambiguity remains high, run `explore` first for brownfield facts, then run `$deep-interview --quick <task>` before proceeding.
    - Carry the snapshot path into autopilot artifacts/state so all phases share grounded context.
 
-1. **Phase 0 - Expansion**: Turn the user's idea into a detailed spec
+0.5 **BMAD routing gate (evaluate before entering the standard non-BMAD phase stack when BMAD artifacts are present)**:
+   - Detect BMAD from `_bmad/`, `_bmad-output/`, `project-context.md`, planning artifacts, and implementation artifacts.
+   - Reconcile BMAD integration state before choosing a path.
+   - If BMAD is detected but **not** execution-ready:
+     - stop before expansion/planning-heavy implementation flow begins
+     - report the missing BMAD workflow category:
+       - `create-prd`
+       - `create-architecture`
+       - `create-epics-and-stories`
+       - `manual-bmad-resolution`
+   - If BMAD is detected and execution-ready:
+     - skip the standard non-BMAD expansion/planning/linear pipeline path
+     - enter **BMAD campaign mode**
+   - If BMAD is not detected:
+     - continue with the standard non-BMAD phase stack below
+
+1. **Phase 0 - Expansion (non-BMAD path)**: Turn the user's idea into a detailed spec
    - If `.omx/specs/deep-interview-*.md` exists for this task: reuse it and skip redundant expansion work
    - If prompt is highly vague: route to `$deep-interview` for Socratic ambiguity-gated clarification
    - Analyst (THOROUGH tier): Extract requirements
    - Architect (THOROUGH tier): Create technical specification
    - Output: `.omx/plans/autopilot-spec.md`
 
-2. **Phase 1 - Planning**: Create an implementation plan from the spec
+2. **Phase 1 - Planning (non-BMAD path)**: Create an implementation plan from the spec
    - Architect (THOROUGH tier): Create plan (direct mode, no interview)
    - Critic (THOROUGH tier): Validate plan
    - Output: `.omx/plans/autopilot-impl.md`
 
-3. **Phase 2 - Execution**: Implement the plan using Ralph + Ultrawork
+3. **Phase 2 - Execution**
+   - Non-BMAD path: implement the plan using Ralph + Ultrawork
    - LOW-tier executor/search roles: Simple tasks
    - STANDARD-tier executor roles: Standard tasks
    - THOROUGH-tier executor/architect roles: Complex tasks
    - Run independent tasks in parallel
+   - BMAD campaign path:
+     1. Reconcile BMAD state
+     2. Resolve the next story conservatively
+     3. If ambiguous, stop with an explicit ambiguity result
+     4. Select backend (`$ralph` by default, `$team` only when explicitly enabled by runtime configuration/metadata)
+     5. Execute exactly one story
+     6. Reconcile BMAD state again
+     7. Confirm completion from BMAD-side artifacts
+     8. Continue to the next story only when completion is confirmed
 
-4. **Phase 3 - QA**: Cycle until all tests pass (UltraQA mode)
+4. **Phase 3 - QA**:
+   - Non-BMAD path: cycle until all tests pass (UltraQA mode)
    - Build, lint, test, fix failures
    - Repeat up to 5 cycles
    - Stop early if the same error repeats 3 times (indicates a fundamental issue)
+   - BMAD campaign path: do not assume a separate global QA phase exists. Treat verification evidence as part of each story execution/completion loop unless a later BMAD-specific phase adds broader QA orchestration.
 
-5. **Phase 4 - Validation**: Multi-perspective review in parallel
+5. **Phase 4 - Validation**:
+   - Non-BMAD path: multi-perspective review in parallel
    - Architect: Functional completeness
    - Security-reviewer: Vulnerability check
    - Code-reviewer: Quality review
    - All must approve; fix and re-validate on rejection
+   - BMAD campaign path: do not assume a separate campaign-wide validation phase exists in the current implementation slice. Any broader BMAD validation layer should be treated as a later-phase extension unless explicitly implemented.
 
 6. **Phase 5 - Cleanup**: Clear all mode state via OMX MCP tools on successful completion
    - `state_clear({mode: "autopilot"})`
@@ -99,6 +139,7 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 - Use `ask_codex` with `agent_role: "code-reviewer"` for Phase 4 quality review
 - Agents form their own analysis first, then consult Codex for cross-validation
 - If ToolSearch finds no MCP tools or Codex is unavailable, proceed without it -- never block on external tools
+- For BMAD-backed repositories, prefer existing OMX BMAD integration helpers/state over ad-hoc artifact interpretation.
 </Tool_Usage>
 
 ## State Management
@@ -112,6 +153,25 @@ Use `omx_state` MCP tools for autopilot lifecycle state.
   `state_write({mode: "autopilot", current_phase: "execution"})`
   `state_write({mode: "autopilot", current_phase: "qa"})`
   `state_write({mode: "autopilot", current_phase: "validation"})`
+- **In BMAD campaign mode**:
+  `state_write({mode: "autopilot", current_phase: "bmad-campaign", state: {bmad_detected: true, bmad_campaign_active: true, bmad_active_story_path: "<story-path>", bmad_active_epic_path: "<epic-path>", bmad_backend: "ralph", bmad_campaign_iteration: <current>}})`
+
+  Typical additive BMAD runtime fields include:
+  - `bmad_detected`
+  - `bmad_phase`
+  - `bmad_ready_for_execution`
+  - `bmad_campaign_active`
+  - `bmad_active_story_path`
+  - `bmad_active_epic_path`
+  - `bmad_remaining_story_paths`
+  - `bmad_completed_story_paths`
+  - `bmad_stop_reason`
+  - `bmad_backend`
+  - `bmad_context_blocked_by_ambiguity`
+  - `bmad_writeback_blocked`
+  - `bmad_campaign_iteration`
+
+  These are OMX runtime/projection fields. They do not replace BMAD artifact authority.
 - **On completion**:
   `state_write({mode: "autopilot", active: false, current_phase: "complete", completed_at: "<now>"})`
 - **On cancellation/cleanup**:
@@ -153,6 +213,12 @@ Why bad: This is an exploration/brainstorming request. Respond conversationally 
 - Stop and report when validation keeps failing after 3 re-validation rounds
 - Stop when the user says "stop", "cancel", or "abort"
 - If requirements were too vague and expansion produces an unclear spec, pause and redirect to `$deep-interview` before proceeding
+- In BMAD campaign mode, stop immediately on:
+  - hard BMAD drift
+  - ambiguous active story
+  - backend failure
+  - writeback blocked with no confirmable completion
+  - story still incomplete after a bounded execution attempt
 </Escalation_And_Stop_Conditions>
 
 <Final_Checklist>
@@ -223,6 +289,19 @@ agentType = "executor"     # Agent type for team workers
 
 The pipeline persists state via `pipeline-state.json` and supports resume from the last
 incomplete stage. See `src/pipeline/orchestrator.ts` for the full API.
+
+## BMAD Campaign Mode (v0.11+)
+
+When BMAD artifacts are present and execution-ready, autopilot may use a dedicated BMAD campaign runner instead of the generic stage-linear pipeline.
+
+Behavior:
+- consumes BMAD artifacts as execution context
+- runs sequential story traversal
+- defaults to `$ralph`
+- treats `$team` as opt-in
+- confirms completion by re-reading BMAD artifacts after each story run
+- stops conservatively on ambiguity or drift instead of guessing
+- this describes the current implementation slice, not a promise that all classic Autopilot phases are replayed inside BMAD mode
 
 ## Troubleshooting
 
