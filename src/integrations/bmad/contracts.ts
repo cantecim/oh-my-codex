@@ -53,6 +53,54 @@ export interface BmadProjection {
 
 export interface BmadPersistedState extends BmadProjection {}
 
+export type BmadGap =
+  | 'missing_prd'
+  | 'missing_architecture'
+  | 'missing_story_or_sprint'
+  | 'ambiguous_active_story'
+  | 'hard_drift';
+
+export interface BmadReadinessResult {
+  detected: boolean;
+  phase: BmadPhase;
+  readyForExecution: boolean;
+  gaps: BmadGap[];
+  gapSummary: string[];
+  ambiguousActiveStory: boolean;
+  writebackSupported: boolean;
+  activeEpicPath: string | null;
+  activeStoryPath: string | null;
+}
+
+export interface BmadAcceptanceCriteriaResult {
+  storyPath: string | null;
+  criteria: string[];
+  source: 'frontmatter' | 'markdown-heading' | 'none';
+}
+
+export interface BmadExecutionContext {
+  detected: boolean;
+  projectContextPath: string | null;
+  architecturePaths: string[];
+  activeStoryPath: string | null;
+  activeEpicPath: string | null;
+  storyAcceptanceCriteria: string[];
+  sprintStatusPath: string | null;
+  implementationArtifactsRoot: string | null;
+  contextBlockedByAmbiguity: boolean;
+  writebackSupported: boolean;
+  writebackBlockedByDrift: boolean;
+}
+
+export type BmadWritebackStatus = 'applied' | 'skipped' | 'unsupported' | 'conflict';
+
+export interface BmadWritebackResult {
+  status: BmadWritebackStatus;
+  target: 'story' | 'sprint-status' | 'implementation-artifact';
+  path: string | null;
+  reason?: string;
+}
+
 export interface BmadReconcileLogEntry {
   timestamp: string;
   artifactIndexVersion: string;

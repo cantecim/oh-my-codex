@@ -28,6 +28,18 @@ async function readJsonFile<T>(path: string): Promise<T | null> {
   }
 }
 
+export async function readPersistedBmadIntegrationState(
+  projectRoot: string,
+): Promise<BmadPersistedState | null> {
+  return readJsonFile<BmadPersistedState>(getBmadStatePath(projectRoot));
+}
+
+export async function readPersistedBmadArtifactIndex(
+  projectRoot: string,
+): Promise<BmadArtifactIndex | null> {
+  return readJsonFile<BmadArtifactIndex>(getBmadArtifactIndexPath(projectRoot));
+}
+
 function trimLog<T>(entries: readonly T[]): T[] {
   return entries.slice(-MAX_LOG_ENTRIES);
 }

@@ -3,10 +3,14 @@ import { join } from 'node:path';
 import { startMode, updateModeState } from '../modes/base.js';
 import { readApprovedExecutionLaunchHint, type ApprovedExecutionLaunchHint } from '../planning/artifacts.js';
 import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
+import { detectBmadProject } from '../integrations/bmad/discovery.js';
+import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
+import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
 } from '../team/followup-planner.js';
+import type { BmadExecutionContext } from '../integrations/bmad/contracts.js';
 
 export const RALPH_HELP = `omx ralph - Launch Codex with ralph persistence mode active
 
@@ -122,8 +126,34 @@ export function buildRalphChangedFilesSeedContents(): string {
 
 export function buildRalphAppendInstructions(
   task: string,
-  options: { changedFilesPath: string; noDeslop: boolean; approvedHint?: ApprovedExecutionLaunchHint | null },
+  options: {
+    changedFilesPath: string;
+    noDeslop: boolean;
+    approvedHint?: ApprovedExecutionLaunchHint | null;
+    bmadContext?: BmadExecutionContext | null;
+  },
 ): string {
+  const bmadLines = options.bmadContext?.detected
+    ? [
+      'BMAD execution context:',
+      `- project context: ${options.bmadContext.projectContextPath ?? 'none'}`,
+      `- architecture: ${options.bmadContext.architecturePaths.length > 0 ? options.bmadContext.architecturePaths.join(', ') : 'none'}`,
+      `- active story: ${options.bmadContext.activeStoryPath ?? 'ambiguous-or-none'}`,
+      `- active epic: ${options.bmadContext.activeEpicPath ?? 'none'}`,
+      `- sprint status: ${options.bmadContext.sprintStatusPath ?? 'none'}`,
+      `- implementation artifacts root: ${options.bmadContext.implementationArtifactsRoot ?? 'none'}`,
+      options.bmadContext.contextBlockedByAmbiguity
+        ? '- BMAD story resolution is ambiguous; do not guess a story-specific writeback target.'
+        : '- Use the resolved BMAD story and epic context when planning implementation and completion evidence.',
+      options.bmadContext.storyAcceptanceCriteria.length > 0
+        ? `- Acceptance criteria: ${options.bmadContext.storyAcceptanceCriteria.join(' | ')}`
+        : '- No BMAD acceptance criteria were extracted; treat this as non-blocking and rely on normal verification evidence plus story context.',
+      options.bmadContext.writebackBlockedByDrift
+        ? '- BMAD writeback is blocked by integration drift; collect evidence but do not mutate BMAD-owned artifacts until drift is resolved.'
+        : '- On successful completion, perform bounded BMAD writeback only for the story artifact, sprint-status, and implementation artifacts. Do not modify PRD, UX, architecture, or project-context.',
+    ]
+    : [];
+
   return [
     '<ralph_native_subagents>',
     'You are in OMX Ralph persistence mode.',
@@ -134,6 +164,7 @@ export function buildRalphAppendInstructions(
     '- Do not declare the task complete, and do not transition into final verification/completion, while active native subagent threads are still running.',
     '- Before closing a verification wave, confirm that active native subagent threads have drained.',
     ...buildRalphApprovedContextLines(options.approvedHint ?? null),
+    ...bmadLines,
     'Final deslop guidance:',
     options.noDeslop
       ? '- `--no-deslop` is active for this Ralph run, so skip the mandatory ai-slop-cleaner final pass and use the latest successful pre-deslop verification evidence.'
@@ -151,7 +182,7 @@ export function buildRalphAppendInstructions(
 async function writeRalphSessionFiles(
   cwd: string,
   task: string,
-  options: { noDeslop: boolean; approvedHint?: ApprovedExecutionLaunchHint | null },
+  options: { noDeslop: boolean; approvedHint?: ApprovedExecutionLaunchHint | null; bmadContext?: BmadExecutionContext | null },
 ): Promise<RalphSessionFiles> {
   const dir = join(cwd, '.omx', 'ralph');
   await mkdir(dir, { recursive: true });
@@ -160,7 +191,12 @@ async function writeRalphSessionFiles(
   await writeFile(changedFilesPath, `${buildRalphChangedFilesSeedContents()}\n`);
   await writeFile(
     instructionsPath,
-    `${buildRalphAppendInstructions(task, { changedFilesPath: '.omx/ralph/changed-files.txt', noDeslop: options.noDeslop, approvedHint: options.approvedHint ?? null })}\n`,
+    `${buildRalphAppendInstructions(task, {
+      changedFilesPath: '.omx/ralph/changed-files.txt',
+      noDeslop: options.noDeslop,
+      approvedHint: options.approvedHint ?? null,
+      bmadContext: options.bmadContext ?? null,
+    })}\n`,
   );
   return { instructionsPath, changedFilesPath: '.omx/ralph/changed-files.txt' };
 }
@@ -179,8 +215,15 @@ export async function ralphCommand(args: string[]): Promise<void> {
   const noDeslop = normalizedArgs.some((arg) => arg.toLowerCase() === '--no-deslop');
   const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
   const staffingPlan = buildFollowupStaffingPlan('ralph', task, availableAgentTypes);
+  let bmadContext: BmadExecutionContext | null = null;
+  let bmadState: Awaited<ReturnType<typeof reconcileBmadIntegrationState>>['state'] | null = null;
+  if (detectBmadProject(cwd).detected) {
+    const reconciled = await reconcileBmadIntegrationState(cwd);
+    bmadState = reconciled.state;
+    bmadContext = await resolveBmadExecutionContext(cwd, reconciled.artifactIndex, reconciled.state);
+  }
   await startMode('ralph', task, 50);
-  const sessionFiles = await writeRalphSessionFiles(cwd, task, { noDeslop, approvedHint });
+  const sessionFiles = await writeRalphSessionFiles(cwd, task, { noDeslop, approvedHint, bmadContext });
   await updateModeState('ralph', {
     current_phase: 'starting',
     canonical_progress_path: artifacts.canonicalProgressPath,
@@ -197,6 +240,16 @@ export async function ralphCommand(args: string[]): Promise<void> {
     approved_plan_path: approvedHint?.sourcePath,
     approved_test_spec_paths: approvedHint?.testSpecPaths ?? [],
     approved_deep_interview_spec_paths: approvedHint?.deepInterviewSpecPaths ?? [],
+    bmad_detected: Boolean(bmadContext?.detected),
+    bmad_phase: bmadState?.phase,
+    bmad_story_path: bmadContext?.activeStoryPath ?? null,
+    bmad_epic_path: bmadContext?.activeEpicPath ?? null,
+    bmad_sprint_status_path: bmadContext?.sprintStatusPath ?? null,
+    bmad_acceptance_criteria: bmadContext?.storyAcceptanceCriteria ?? [],
+    bmad_context_blocked_by_ambiguity: bmadContext?.contextBlockedByAmbiguity ?? false,
+    bmad_writeback_supported: bmadContext?.writebackSupported ?? false,
+    bmad_writeback_blocked: bmadContext?.writebackBlockedByDrift ?? false,
+    bmad_implementation_artifacts_root: bmadContext?.implementationArtifactsRoot ?? null,
     ...(artifacts.canonicalPrdPath ? { canonical_prd_path: artifacts.canonicalPrdPath } : {}),
   });
   if (artifacts.migratedPrd) {

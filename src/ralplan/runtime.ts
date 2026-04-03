@@ -1,5 +1,9 @@
 import { cancelMode, readModeState, startMode, updateModeState } from '../modes/base.js';
 import { readPlanningArtifacts } from '../planning/artifacts.js';
+import { detectBmadProject } from '../integrations/bmad/discovery.js';
+import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
+import { deriveBmadReadiness } from '../integrations/bmad/readiness.js';
+import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
 
 export const RALPLAN_ACTIVE_PHASES = [
   'draft',
@@ -126,6 +130,50 @@ export async function runRalplanConsensus(
   }
 
   await startMode('ralplan', options.task, maxIterations, cwd);
+
+  const bmadDetected = detectBmadProject(cwd);
+  if (bmadDetected.detected) {
+    const bmad = await reconcileBmadIntegrationState(cwd);
+    const readiness = deriveBmadReadiness(bmad.artifactIndex, bmad.state);
+    const context = await resolveBmadExecutionContext(cwd, bmad.artifactIndex, bmad.state);
+    aggregatedArtifacts.bmad = {
+      detected: true,
+      phase: bmad.state.phase,
+      drift_status: bmad.state.driftStatus,
+      readiness,
+      execution_context: {
+        active_story_path: context.activeStoryPath,
+        active_epic_path: context.activeEpicPath,
+        project_context_path: context.projectContextPath,
+        architecture_paths: context.architecturePaths,
+        sprint_status_path: context.sprintStatusPath,
+        implementation_artifacts_root: context.implementationArtifactsRoot,
+        story_acceptance_criteria: context.storyAcceptanceCriteria,
+        context_blocked_by_ambiguity: context.contextBlockedByAmbiguity,
+        writeback_supported: context.writebackSupported,
+      },
+      recommended_next_category: readiness.readyForExecution
+        ? 'execution'
+        : readiness.gaps[0] === 'missing_prd'
+          ? 'create-prd'
+          : readiness.gaps[0] === 'missing_architecture'
+            ? 'create-architecture'
+            : readiness.gaps[0] === 'missing_story_or_sprint'
+              ? 'create-epics-and-stories'
+              : 'manual-bmad-resolution',
+    };
+    await updateRalplanState(cwd, {
+      bmad_detected: true,
+      bmad_phase: bmad.state.phase,
+      bmad_ready_for_execution: readiness.readyForExecution,
+      bmad_gap_summary: readiness.gapSummary,
+      bmad_active_story_path: context.activeStoryPath,
+      bmad_active_epic_path: context.activeEpicPath,
+      bmad_sprint_status_path: context.sprintStatusPath,
+      bmad_context_blocked_by_ambiguity: context.contextBlockedByAmbiguity,
+      bmad_writeback_supported: context.writebackSupported,
+    });
+  }
 
   try {
     while (iteration <= maxIterations) {

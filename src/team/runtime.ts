@@ -95,6 +95,8 @@ import {
 } from './worker-bootstrap.js';
 import { loadRolePrompt } from './role-router.js';
 import { composeRoleInstructionsForRole } from '../agents/native-config.js';
+import type { BmadExecutionContext } from '../integrations/bmad/contracts.js';
+import { renderBmadTeamContextBlock } from '../integrations/bmad/context.js';
 import { codexPromptsDir } from '../utils/paths.js';
 import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
@@ -784,6 +786,7 @@ async function prepareWorkerWorktreeShutdownReports(config: TeamConfig, leaderCw
 
 export interface TeamStartOptions {
   worktreeMode?: WorktreeMode;
+  bmadContext?: BmadExecutionContext | null;
 }
 
 interface ShutdownGateCounts {
@@ -1323,7 +1326,9 @@ export async function startTeam(
 
   // 2. Team name is already sanitized above.
   let sessionName = `omx-team-${sanitized}`;
-  const overlay = generateWorkerOverlay(sanitized);
+  const overlay = `${generateWorkerOverlay(sanitized)}${
+    options.bmadContext?.detected ? `\n${renderBmadTeamContextBlock(options.bmadContext)}` : ''
+  }`;
   let workerInstructionsPath: string | null = null;
   let sessionCreated = false;
   const createdWorkerPaneIds: string[] = [];
@@ -1437,6 +1442,7 @@ export async function startTeam(
           teamStateRoot,
           leaderCwd,
           worktreePath: workerWorktreePath,
+          bmadContextBlock: options.bmadContext?.detected ? renderBmadTeamContextBlock(options.bmadContext) : undefined,
         })
         : rolePromptContent
           ? await writeWorkerRoleInstructionsFile(sanitized, workerName, leaderCwd, fallbackInstructionsPath, workerRole, rolePromptContent)

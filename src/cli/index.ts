@@ -2157,6 +2157,80 @@ async function postLaunch(
     );
   }
 
+  // 3.1 Best-effort BMAD writeback for completed Ralph runs.
+  try {
+    const { readModeState } = await import("../modes/base.js");
+    const ralphState = await readModeState("ralph", cwd);
+    if (
+      ralphState?.current_phase === "complete" &&
+      ralphState?.bmad_detected === true &&
+      ralphState?.bmad_writeback_blocked !== true
+    ) {
+      const {
+        recordImplementationArtifactSummary,
+        recordSprintStatusUpdate,
+        recordStoryCompletion,
+      } = await import("../integrations/bmad/writeback.js");
+      const changedFilesPath =
+        typeof ralphState.deslop_changed_files_path === "string" &&
+        ralphState.deslop_changed_files_path.trim().length > 0
+          ? join(cwd, ralphState.deslop_changed_files_path)
+          : join(cwd, ".omx", "ralph", "changed-files.txt");
+      const changedFiles = existsSync(changedFilesPath)
+        ? readFileSync(changedFilesPath, "utf-8")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith("#"))
+        : [];
+      const verificationSummary = typeof ralphState.latest_critic_summary === "string" && ralphState.latest_critic_summary.trim().length > 0
+        ? ralphState.latest_critic_summary
+        : "Ralph run completed; rely on captured fresh verification evidence for details.";
+      const reviewSummary = typeof ralphState.latest_architect_summary === "string" && ralphState.latest_architect_summary.trim().length > 0
+        ? ralphState.latest_architect_summary
+        : undefined;
+      const implementationArtifacts = await Promise.all([
+        recordImplementationArtifactSummary(cwd, {
+          implementationArtifactsRoot: typeof ralphState.bmad_implementation_artifacts_root === "string" ? ralphState.bmad_implementation_artifacts_root : null,
+          storyPath: typeof ralphState.bmad_story_path === "string" ? ralphState.bmad_story_path : null,
+          epicPath: typeof ralphState.bmad_epic_path === "string" ? ralphState.bmad_epic_path : null,
+          verificationSummary,
+          reviewOutcomeSummary: reviewSummary,
+          changedFiles,
+          kind: "story-run",
+        }),
+        recordImplementationArtifactSummary(cwd, {
+          implementationArtifactsRoot: typeof ralphState.bmad_implementation_artifacts_root === "string" ? ralphState.bmad_implementation_artifacts_root : null,
+          storyPath: typeof ralphState.bmad_story_path === "string" ? ralphState.bmad_story_path : null,
+          epicPath: typeof ralphState.bmad_epic_path === "string" ? ralphState.bmad_epic_path : null,
+          verificationSummary,
+          reviewOutcomeSummary: reviewSummary,
+          changedFiles,
+          kind: "verification",
+        }),
+      ]);
+      const implementationArtifactPaths = implementationArtifacts
+        .filter((result) => result.status === "applied" && typeof result.path === "string")
+        .map((result) => result.path as string);
+      await recordStoryCompletion(cwd, {
+        storyPath: typeof ralphState.bmad_story_path === "string" ? ralphState.bmad_story_path : null,
+        completedAt: typeof ralphState.completed_at === "string" ? ralphState.completed_at : new Date().toISOString(),
+        mode: "ralph",
+        verificationSummary,
+        implementationArtifactPaths,
+        reviewOutcomeSummary: reviewSummary,
+      });
+      await recordSprintStatusUpdate(cwd, {
+        sprintStatusPath: typeof ralphState.bmad_sprint_status_path === "string" ? ralphState.bmad_sprint_status_path : null,
+        storyPath: typeof ralphState.bmad_story_path === "string" ? ralphState.bmad_story_path : null,
+        status: "completed",
+      });
+    }
+  } catch (err) {
+    console.error(
+      `[omx] postLaunch: BMAD Ralph writeback failed: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
   // 4. Send session-end lifecycle notification (best effort)
   try {
     const { notifyLifecycle } = await import("../notifications/index.js");

@@ -3,12 +3,22 @@ import { join } from 'node:path';
 import { updateModeState, startMode, readModeState } from '../modes/base.js';
 import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime, type TeamSnapshot } from '../team/runtime.js';
 import { DEFAULT_MAX_WORKERS } from '../team/state.js';
+import { listTasks } from '../team/state.js';
 import { sanitizeTeamName } from '../team/tmux-session.js';
 import { readTeamEvents, waitForTeamEvent } from '../team/state/events.js';
 import type { TeamEvent, TeamTask, WorkerInfo, WorkerStatus } from '../team/state.js';
 import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
 import { classifyTaskSize } from '../hooks/task-size-detector.js';
 import { readApprovedExecutionLaunchHint } from '../planning/artifacts.js';
+import { detectBmadProject } from '../integrations/bmad/discovery.js';
+import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
+import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
+import {
+  recordImplementationArtifactSummary,
+  recordSprintStatusUpdate,
+  recordStoryCompletion,
+} from '../integrations/bmad/writeback.js';
+import type { BmadExecutionContext } from '../integrations/bmad/contracts.js';
 import { routeTaskToRole } from '../team/role-router.js';
 import { allocateTasksToWorkers } from '../team/allocation-policy.js';
 import {
@@ -2019,6 +2029,7 @@ function distributeTasksToWorkers(
 async function ensureTeamModeState(
   parsed: ParsedTeamArgs,
   tasks?: Array<{ role?: string }>,
+  bmadContext?: BmadExecutionContext | null,
 ): Promise<void> {
   const fallbackRole = resolveImplicitTeamFallbackRole(parsed.agentType, parsed.explicitAgentType);
   const roleDistribution = tasks && tasks.length > 0
@@ -2042,6 +2053,15 @@ async function ensureTeamModeState(
       available_agent_types: availableAgentTypes,
       staffing_summary: staffingPlan.staffingSummary,
       staffing_allocations: staffingPlan.allocations,
+      bmad_detected: Boolean(bmadContext?.detected),
+      bmad_story_path: bmadContext?.activeStoryPath ?? null,
+      bmad_epic_path: bmadContext?.activeEpicPath ?? null,
+      bmad_sprint_status_path: bmadContext?.sprintStatusPath ?? null,
+      bmad_acceptance_criteria: bmadContext?.storyAcceptanceCriteria ?? [],
+      bmad_context_blocked_by_ambiguity: bmadContext?.contextBlockedByAmbiguity ?? false,
+      bmad_writeback_supported: bmadContext?.writebackSupported ?? false,
+      bmad_writeback_blocked: bmadContext?.writebackBlockedByDrift ?? false,
+      bmad_implementation_artifacts_root: bmadContext?.implementationArtifactsRoot ?? null,
     });
     return;
   }
@@ -2055,8 +2075,23 @@ async function ensureTeamModeState(
     available_agent_types: availableAgentTypes,
     staffing_summary: staffingPlan.staffingSummary,
     staffing_allocations: staffingPlan.allocations,
+    bmad_detected: Boolean(bmadContext?.detected),
+    bmad_story_path: bmadContext?.activeStoryPath ?? null,
+    bmad_epic_path: bmadContext?.activeEpicPath ?? null,
+    bmad_sprint_status_path: bmadContext?.sprintStatusPath ?? null,
+    bmad_acceptance_criteria: bmadContext?.storyAcceptanceCriteria ?? [],
+    bmad_context_blocked_by_ambiguity: bmadContext?.contextBlockedByAmbiguity ?? false,
+    bmad_writeback_supported: bmadContext?.writebackSupported ?? false,
+    bmad_writeback_blocked: bmadContext?.writebackBlockedByDrift ?? false,
+    bmad_implementation_artifacts_root: bmadContext?.implementationArtifactsRoot ?? null,
   });
 
+}
+
+async function resolveTeamBmadContext(cwd: string): Promise<BmadExecutionContext | null> {
+  if (!detectBmadProject(cwd).detected) return null;
+  const reconciled = await reconcileBmadIntegrationState(cwd);
+  return resolveBmadExecutionContext(cwd, reconciled.artifactIndex, reconciled.state);
 }
 
 
@@ -2332,6 +2367,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
       console.log(`No resumable team found for ${name}`);
       return;
     }
+    const bmadContext = await resolveTeamBmadContext(cwd);
     await ensureTeamModeState({
       task: runtime.config.task,
       workerCount: runtime.config.worker_count,
@@ -2339,7 +2375,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
       explicitAgentType: false,
       explicitWorkerCount: false,
       teamName: runtime.teamName,
-    });
+    }, undefined, bmadContext);
     const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
     const staffingPlan = buildFollowupStaffingPlan('team', runtime.config.task, availableAgentTypes, {
       workerCount: runtime.config.worker_count,
@@ -2354,6 +2390,54 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     if (!name) throw new Error('Usage: omx team shutdown <team-name> [--force]');
     const force = teamArgs.includes('--force');
     await shutdownTeam(name, cwd, { force });
+    if (!force) {
+      const bmadContext = await resolveTeamBmadContext(cwd);
+      if (bmadContext?.detected && !bmadContext.writebackBlockedByDrift) {
+        const teamTasks = await listTasks(name, cwd).catch(() => []);
+        const verificationSummary = teamTasks.length > 0
+          ? `Completed team tasks: ${teamTasks.filter((task) => task.status === 'completed').length}/${teamTasks.length}`
+          : 'Team shutdown completed after verification gate passed.';
+        const reviewSummary = teamTasks
+          .filter((task) => task.status === 'completed' && typeof task.result === 'string' && task.result.trim().length > 0)
+          .map((task) => `${task.subject}: ${String(task.result).split('\n')[0]}`)
+          .slice(0, 5)
+          .join(' | ');
+        const implementationArtifacts = await Promise.all([
+          recordImplementationArtifactSummary(cwd, {
+            implementationArtifactsRoot: bmadContext.implementationArtifactsRoot,
+            storyPath: bmadContext.activeStoryPath,
+            epicPath: bmadContext.activeEpicPath,
+            verificationSummary,
+            reviewOutcomeSummary: reviewSummary || undefined,
+            kind: 'story-run',
+          }),
+          recordImplementationArtifactSummary(cwd, {
+            implementationArtifactsRoot: bmadContext.implementationArtifactsRoot,
+            storyPath: bmadContext.activeStoryPath,
+            epicPath: bmadContext.activeEpicPath,
+            verificationSummary,
+            reviewOutcomeSummary: reviewSummary || undefined,
+            kind: 'verification',
+          }),
+        ]);
+        const implementationArtifactPaths = implementationArtifacts
+          .filter((result) => result.status === 'applied' && result.path)
+          .map((result) => result.path as string);
+        await recordStoryCompletion(cwd, {
+          storyPath: bmadContext.activeStoryPath,
+          completedAt: new Date().toISOString(),
+          mode: 'team',
+          verificationSummary,
+          implementationArtifactPaths,
+          reviewOutcomeSummary: reviewSummary || undefined,
+        }).catch(() => {});
+        await recordSprintStatusUpdate(cwd, {
+          sprintStatusPath: bmadContext.sprintStatusPath,
+          storyPath: bmadContext.activeStoryPath,
+          status: 'completed',
+        }).catch(() => {});
+      }
+    }
     await updateModeState('team', {
       active: false,
       current_phase: 'cancelled',
@@ -2385,6 +2469,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     workerCount: executionPlan.workerCount,
     fallbackRole: resolveImplicitTeamFallbackRole(parsed.agentType, parsed.explicitAgentType),
   });
+  const bmadContext = await resolveTeamBmadContext(cwd);
   const runtime = await startTeam(
     parsed.teamName,
     parsed.task,
@@ -2392,9 +2477,9 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     executionPlan.workerCount,
     tasks,
     cwd,
-    { worktreeMode },
+    { worktreeMode, bmadContext },
   );
 
-  await ensureTeamModeState(effectiveParsed, tasks);
+  await ensureTeamModeState(effectiveParsed, tasks, bmadContext);
   await renderStartSummary(runtime, staffingPlan);
 }

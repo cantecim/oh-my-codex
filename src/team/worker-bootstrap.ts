@@ -27,6 +27,7 @@ interface WorkerRootAgentsOptions {
   teamStateRoot: string;
   leaderCwd: string;
   worktreePath: string;
+  bmadContextBlock?: string;
 }
 
 interface WorkerRootAgentsBackup {
@@ -117,6 +118,7 @@ You are operating as the **${options.workerRole}** role for this team run. Apply
 ${options.rolePromptContent.trim()}
 </team_worker_role>
 <!-- OMX:TEAM:ROLE:END -->
+${options.bmadContextBlock ? `\n${options.bmadContextBlock.trim()}\n` : ''}
 `;
 }
 
