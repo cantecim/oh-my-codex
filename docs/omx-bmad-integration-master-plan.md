@@ -94,10 +94,12 @@ The systems meet through derived state, not shared ownership. The projected view
 OMX should detect BMAD usage by scanning for signals such as:
 
 - `_bmad/`
-- `_bmad-output/`
-- `_bmad-output/project-context.md`
-- `_bmad-output/planning-artifacts/`
-- `_bmad-output/implementation-artifacts/`
+- `_bmad/core/config.yaml`
+- the configured BMAD `output_folder` from `_bmad/core/config.yaml`
+- `_bmad-output/` as the default fallback when no configured `output_folder` exists
+- `project-context.md` under the resolved output root
+- `planning-artifacts/` under the resolved output root
+- `implementation-artifacts/` under the resolved output root
 - BMAD-style PRD, architecture, epic, story, or sprint artifacts
 
 ### Layer B: Artifact Discovery
@@ -119,6 +121,13 @@ OMX should derive a BMAD integration projection from discovered artifacts. This 
 ### Layer D: Explicit Writeback
 
 When OMX completes or advances implementation work, it may write back progress summaries to BMAD-owned artifacts through explicit writeback operations only.
+
+Current implementation boundary:
+
+- story completion/progress blocks may be written conservatively
+- sprint-status may be updated only when conservative mapping succeeds
+- implementation summaries and hook artifacts are written under the resolved BMAD `output_folder` implementation-artifacts directory
+- PRD, UX, architecture, and `project-context.md` remain read-only
 
 ### Layer E: Drift Detection
 
@@ -172,6 +181,7 @@ It should:
 - execute implementation work directly through OMX runtime behavior
 - run verification and review loops against BMAD-aware acceptance boundaries
 - write back progress summaries explicitly
+- emit implementation-side story hook artifacts under the resolved BMAD implementation-artifacts root
 
 The first version should prefer OMX-native execution rather than requiring BMAD-native developer workflow invocation.
 
@@ -197,10 +207,13 @@ It should:
 - detect whether BMAD planning artifacts are sufficient
 - invoke `$ralplan`-style readiness decisions when needed
 - choose between `$ralph` and `$team` for execution
+- optionally use an explicit `bmad-native` compatibility backend under OMX orchestration when selected
 - continue across stories and epics until terminal completion
 - stop safely on blockers, hard drift, or missing authority
 
 Conceptually, `$autopilot` should operate as a campaign runner for BMAD-ready projects.
+
+This is now implemented through the canonical autopilot runtime bridge path, not only as a library-level concept.
 
 ## BMAD-Aware `$autopilot` Campaign Loop
 
@@ -400,6 +413,12 @@ Primary outcome:
 
 - `$autopilot` can self-carry a BMAD-ready project through implementation
 
+Implementation notes:
+
+- the autopilot skill/runtime bridge now routes BMAD repos through BMAD-aware gating and campaign execution
+- HUD/state readers expose compact `planning-required` and `bmad-campaign` visibility
+- ambiguity and hard drift stop the campaign conservatively
+
 ### Phase 4: Advanced Integration
 
 Deliverables:
@@ -413,6 +432,13 @@ Deliverables:
 Primary outcome:
 
 - deeper and more ergonomic OMX/BMAD interoperability
+
+Implementation notes:
+
+- workflow handoff payloads are shared across `$ralplan`, `$ralph`, `$team`, and `$autopilot`
+- BMAD-native execution exists as an explicit non-default compatibility backend
+- retrospective/status hooks remain implementation-side only and do not mutate BMAD planning-authority artifacts
+- medium drift may trigger conservative rebind/recovery attempts; hard drift still stops rather than auto-repairing broadly
 
 ## Epic-Level Task Breakdown
 
@@ -487,19 +513,19 @@ Key end-to-end scenarios:
 7. Drift appears mid-run and is handled safely
 8. Interrupted `$autopilot` run resumes correctly
 
-## Open Design Decisions
+## Resolved Design Decisions
 
-The following decisions should be resolved explicitly during implementation planning:
+The following decisions are now implemented:
 
-1. Which artifact is authoritative for active story selection?
-2. Which BMAD-owned files may OMX write back to in the first version?
-3. Should retrospective and sprint-status updates be included in the first writeback scope?
-4. Should BMAD-native workflow invocation exist in v1 or be deferred to a later phase?
-5. How should BMAD quick-flow-style projects be modeled inside `$autopilot`?
+1. Active story selection is BMAD-derived and OMX-cached; OMX stops on ambiguity instead of guessing.
+2. OMX writeback is limited to conservative story blocks, narrow sprint-status updates, and implementation-side artifacts/hooks.
+3. Retrospective and status hooks exist only as implementation-side evidence outputs.
+4. BMAD-native execution exists as an explicit compatibility backend, not the default path.
+5. BMAD-ready projects enter a dedicated autopilot campaign path rather than replaying the generic non-BMAD phase stack.
 
 ## Minimum Viable Product
 
-The initial MVP should include:
+The initial MVP included:
 
 - BMAD detection
 - artifact indexing
@@ -510,7 +536,7 @@ The initial MVP should include:
 - drift warnings
 - foundational tests
 
-The MVP should explicitly exclude:
+The MVP explicitly excluded:
 
 - full BMAD-native workflow invocation
 - advanced retrospective automation

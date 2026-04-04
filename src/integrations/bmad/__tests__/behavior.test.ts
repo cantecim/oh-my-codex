@@ -207,4 +207,25 @@ describe('BMAD writeback helpers', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('writes implementation-side hook artifacts under a configured BMAD output_folder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-bmad-hooks-'));
+    try {
+      const outputRoot = '.custom-output';
+      const implementationArtifactsRoot = `${outputRoot}/implementation-artifacts`;
+      const storyHook = await recordBmadStoryHook(root, {
+        implementationArtifactsRoot,
+        storyPath: `${outputRoot}/planning-artifacts/epics/story-login.md`,
+        epicPath: `${outputRoot}/planning-artifacts/epics/epic-auth.md`,
+        backend: 'team',
+        verificationSummary: 'ok',
+      });
+      assert.equal(storyHook.status, 'applied');
+      assert.equal(storyHook.path, `${outputRoot}/implementation-artifacts/omx-story-hook-story-login.md`);
+      const content = await readFile(join(root, storyHook.path!), 'utf-8');
+      assert.match(content, /- Backend: team/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
