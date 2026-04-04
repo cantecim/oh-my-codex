@@ -25,7 +25,6 @@ export const EXPLORE_USAGE = [
 const PROMPT_FLAG = '--prompt';
 const PROMPT_FILE_FLAG = '--prompt-file';
 export const EXPLORE_BIN_ENV = EXPLORE_BIN_ENV_SHARED;
-const LEGACY_EXPLORE_CODEX_BIN_ENV = 'OMX_EXPLORE_CODEX_BIN';
 const EXPLORE_SPARK_MODEL_ENV = 'OMX_EXPLORE_SPARK_MODEL';
 
 export interface ParsedExploreArgs {
@@ -274,7 +273,7 @@ export function resolveExploreHarnessCommand(
   packageRoot = getPackageRoot(),
   env: NodeJS.ProcessEnv = process.env,
 ): ExploreHarnessCommand {
-  const override = env[EXPLORE_BIN_ENV]?.trim() || env[LEGACY_EXPLORE_CODEX_BIN_ENV]?.trim();
+  const override = env[EXPLORE_BIN_ENV]?.trim();
   if (override) {
     return { command: isAbsolute(override) ? override : join(packageRoot, override), args: [] };
   }
@@ -300,7 +299,7 @@ export async function resolveExploreHarnessCommandWithHydration(
   packageRoot = getPackageRoot(),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ExploreHarnessCommand> {
-  const override = env[EXPLORE_BIN_ENV]?.trim() || env[LEGACY_EXPLORE_CODEX_BIN_ENV]?.trim();
+  const override = env[EXPLORE_BIN_ENV]?.trim();
   if (override) {
     return { command: isAbsolute(override) ? override : join(packageRoot, override), args: [] };
   }

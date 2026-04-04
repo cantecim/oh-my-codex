@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { toLegacyDisplayPath } from '../utils/display-path.js';
 import { updateModeState, startMode, readModeState } from '../modes/base.js';
 import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime, type TeamSnapshot } from '../team/runtime.js';
 import { DEFAULT_MAX_WORKERS } from '../team/state.js';
@@ -581,6 +582,7 @@ async function readTeamPaneStatus(
     command: string;
   }>;
 }> {
+  const displayCwd = toLegacyDisplayPath(cwd);
   if (!config) {
     return {
       leader_pane_id: null,
@@ -884,7 +886,7 @@ async function readTeamPaneStatus(
   const recommendedInspectTaskClaimLockPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const taskId = recommendedInspectTasks[target];
-      return [target, taskId && snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'claims', `task-${taskId}.lock`) : null];
+      return [target, taskId && snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'claims', `task-${taskId}.lock`) : null];
     }),
   );
   const recommendedInspectRequiresCodeChange = Object.fromEntries(
@@ -974,109 +976,109 @@ async function readTeamPaneStatus(
   const recommendedInspectTaskPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const taskId = recommendedInspectTasks[target];
-      return [target, taskId && snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'tasks', `task-${taskId}.json`) : null];
+      return [target, taskId && snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'tasks', `task-${taskId}.json`) : null];
     }),
   );
   const recommendedInspectApprovalPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const taskId = recommendedInspectTasks[target];
-      return [target, taskId && snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'approvals', `task-${taskId}.json`) : null];
+      return [target, taskId && snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'approvals', `task-${taskId}.json`) : null];
     }),
   );
   const recommendedInspectWorkerStateDirs = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target) : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target) : null,
     ]),
   );
   const recommendedInspectWorkerStatusPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'status.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'status.json') : null,
     ]),
   );
   const recommendedInspectWorkerHeartbeatPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'heartbeat.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'heartbeat.json') : null,
     ]),
   );
   const recommendedInspectWorkerIdentityPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'identity.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'identity.json') : null,
     ]),
   );
   const recommendedInspectWorkerInboxPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'inbox.md') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'inbox.md') : null,
     ]),
   );
   const recommendedInspectWorkerMailboxPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'mailbox', `${target}.json`) : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'mailbox', `${target}.json`) : null,
     ]),
   );
   const recommendedInspectWorkerShutdownRequestPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-request.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-request.json') : null,
     ]),
   );
   const recommendedInspectWorkerShutdownAckPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-ack.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-ack.json') : null,
     ]),
   );
   const recommendedInspectTeamConfigPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'config.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'config.json') : null,
     ]),
   );
   const recommendedInspectTeamManifestPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'manifest.v2.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'manifest.v2.json') : null,
     ]),
   );
   const recommendedInspectTeamEventsPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'events', 'events.ndjson') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'events', 'events.ndjson') : null,
     ]),
   );
   const recommendedInspectTeamDispatchPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'dispatch', 'requests.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'dispatch', 'requests.json') : null,
     ]),
   );
   const recommendedInspectTeamDirPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName) : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName) : null,
     ]),
   );
   const recommendedInspectTeamPhasePaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'phase.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'phase.json') : null,
     ]),
   );
   const recommendedInspectTeamMonitorSnapshotPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'monitor-snapshot.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'monitor-snapshot.json') : null,
     ]),
   );
   const recommendedInspectTeamSummarySnapshotPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'summary-snapshot.json') : null,
+      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'summary-snapshot.json') : null,
     ]),
   );
   const recommendedInspectStates = Object.fromEntries(
@@ -2135,6 +2137,7 @@ export function buildLeaderMonitoringHints(teamName: string): string[] {
 
 export async function teamCommand(args: string[], _options: TeamCliOptions = {}): Promise<void> {
   const cwd = process.cwd();
+  const leaderEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };
   const parsedWorktree = parseWorktreeMode(args);
   const worktreeMode = resolveDefaultTeamWorktreeMode(parsedWorktree.mode);
   const teamArgs = parsedWorktree.remainingArgs;
@@ -2486,7 +2489,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     executionPlan.workerCount,
     tasks,
     cwd,
-    { worktreeMode, bmadContext },
+    { worktreeMode, bmadContext, leaderEnvSnapshot },
   );
 
   await ensureTeamModeState(effectiveParsed, tasks, bmadContext);

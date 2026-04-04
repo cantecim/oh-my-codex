@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import process from 'process';
 import { spawnSync } from 'child_process';
+import { toLegacyDisplayPath } from '../utils/display-path.js';
 
 const PROVIDER_BINARIES: Record<string, string> = {
   claude: 'claude',
@@ -142,7 +143,7 @@ async function writeArtifact({ provider, originalTask, finalPrompt, rawOutput, e
 
   await mkdir(artifactDir, { recursive: true });
   await writeFile(artifactPath, body, 'utf8');
-  return artifactPath;
+  return toLegacyDisplayPath(artifactPath);
 }
 
 async function main(): Promise<void> {

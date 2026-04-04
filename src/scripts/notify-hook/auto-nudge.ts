@@ -546,6 +546,13 @@ async function isManagedOmxSessionForAutoNudge(cwd, payload) {
     if (safeString(sessionState.session_id).trim() !== invocationSessionId) return false;
     if (isSessionStale(sessionState)) return false;
 
+    // Fallback watcher can synthesize notify-hook payloads without an active
+    // mode state. If the current cwd has a live OMX session file that matches
+    // the invocation session id and we are already inside tmux, treat it as a
+    // managed OMX session even when the watcher is not a descendant of the
+    // original session owner process.
+    if (safeString(process.env.TMUX_PANE || '').trim() !== '') return true;
+
     const currentTmuxSession = readCurrentTmuxSessionName();
     if (currentTmuxSession) {
       const expectedTmuxSession = buildExpectedManagedTmuxSessionName(cwd, invocationSessionId);

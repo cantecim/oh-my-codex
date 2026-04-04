@@ -787,6 +787,7 @@ async function prepareWorkerWorktreeShutdownReports(config: TeamConfig, leaderCw
 export interface TeamStartOptions {
   worktreeMode?: WorktreeMode;
   bmadContext?: BmadExecutionContext | null;
+  leaderEnvSnapshot?: NodeJS.ProcessEnv;
 }
 
 interface ShutdownGateCounts {
@@ -1130,8 +1131,14 @@ async function teardownPromptWorker(
 
 function isPromptWorkerAlive(config: TeamConfig, worker: WorkerInfo): boolean {
   const handle = getPromptWorkerHandle(config.name, worker.name);
+  const workerPid = typeof worker.pid === 'number' && Number.isInteger(worker.pid) && worker.pid > 0
+    ? worker.pid
+    : null;
+  if (workerPid !== null && !isPidAlive(workerPid)) {
+    return false;
+  }
   if (handle?.child.exitCode === null && !handle.child.killed) return true;
-  return isPidAlive(worker.pid as number);
+  return workerPid !== null ? isPidAlive(workerPid) : false;
 }
 
 export { TEAM_LOW_COMPLEXITY_DEFAULT_MODEL };
@@ -1256,10 +1263,11 @@ export async function startTeam(
   options: TeamStartOptions = {},
 ): Promise<TeamRuntime> {
   const leaderCwd = resolve(cwd);
+  const leaderEnvSnapshot: NodeJS.ProcessEnv = { ...(options.leaderEnvSnapshot ?? process.env) };
   await assertNestedTeamAllowed(leaderCwd);
   const effectiveWorktreeMode = resolveEffectiveTeamWorktreeMode(leaderCwd, options.worktreeMode);
 
-  const workerLaunchMode = resolveTeamWorkerLaunchMode(process.env);
+  const workerLaunchMode = resolveTeamWorkerLaunchMode(leaderEnvSnapshot);
   const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
   if (workerLaunchMode === 'interactive') {
     if (!isTmuxAvailable()) {
@@ -1335,12 +1343,12 @@ export async function startTeam(
   let createdLeaderPaneId: string | undefined;
   let config: TeamConfig | null = null;
   const sharedWorkerLaunchArgs = resolveTeamWorkerLaunchArgs({
-    existingRaw: process.env.OMX_TEAM_WORKER_LAUNCH_ARGS,
-    fallbackModel: resolveAgentDefaultModel(agentType, process.env.CODEX_HOME),
+    existingRaw: leaderEnvSnapshot.OMX_TEAM_WORKER_LAUNCH_ARGS,
+    fallbackModel: resolveAgentDefaultModel(agentType, leaderEnvSnapshot.CODEX_HOME),
   });
-  const workerCliPlan = resolveTeamWorkerCliPlan(workerCount, sharedWorkerLaunchArgs, process.env);
-  const workerReadyTimeoutMs = resolveWorkerReadyTimeoutMs(process.env);
-  const skipWorkerReadyWait = shouldSkipWorkerReadyWait(process.env);
+  const workerCliPlan = resolveTeamWorkerCliPlan(workerCount, sharedWorkerLaunchArgs, leaderEnvSnapshot);
+  const workerReadyTimeoutMs = resolveWorkerReadyTimeoutMs(leaderEnvSnapshot);
+  const skipWorkerReadyWait = shouldSkipWorkerReadyWait(leaderEnvSnapshot);
 
   try {
     // 3. Init state directory + config
@@ -1351,7 +1359,7 @@ export async function startTeam(
       workerCount,
       leaderCwd,
       DEFAULT_MAX_WORKERS,
-      { ...process.env, OMX_TEAM_DISPLAY_MODE: displayMode, OMX_TEAM_WORKER_LAUNCH_MODE: workerLaunchMode },
+      { ...leaderEnvSnapshot, OMX_TEAM_DISPLAY_MODE: displayMode, OMX_TEAM_WORKER_LAUNCH_MODE: workerLaunchMode },
       {
         leader_cwd: leaderCwd,
         team_state_root: teamStateRoot,
@@ -1421,7 +1429,7 @@ export async function startTeam(
         ?? await loadRolePrompt(workerRole, codexPromptsDir());
       const preferredReasoning = resolveAgentReasoningEffort(workerRole) ?? resolveAgentReasoningEffort(agentType);
       const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(
-        process.env,
+        leaderEnvSnapshot,
         workerRole,
         undefined,
         preferredReasoning,
@@ -1480,6 +1488,7 @@ export async function startTeam(
 
     const workerStartups = workerBootstrapPlans.map((plan) => {
       const env: Record<string, string> = {
+        PATH: leaderEnvSnapshot.PATH ?? leaderEnvSnapshot.Path ?? '',
         [TEAM_STATE_ROOT_ENV]: teamStateRoot,
         [TEAM_LEADER_CWD_ENV]: leaderCwd,
         [MODEL_INSTRUCTIONS_FILE_ENV]: plan.instructionsFilePath,

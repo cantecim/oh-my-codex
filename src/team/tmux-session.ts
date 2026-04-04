@@ -1,7 +1,7 @@
 import { spawnSync, execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import {
   CODEX_BYPASS_FLAG,
   MADMAX_FLAG,
@@ -580,8 +580,8 @@ function commandExists(binary: string): boolean {
  * Resolve the absolute path of a binary from the leader's current environment.
  * Returns the absolute path or the bare command name as fallback.
  */
-function resolveAbsoluteBinaryPath(binary: string): string {
-  return resolveCommandPathForPlatform(binary) || binary;
+function resolveAbsoluteBinaryPath(binary: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveCommandPathForPlatform(binary, process.platform, env) || binary;
 }
 
 /**
@@ -675,7 +675,10 @@ export function buildWorkerProcessLaunchSpec(
     ? [...cliLaunchArgs, CODEX_BYPASS_FLAG]
     : cliLaunchArgs;
 
-  const resolvedCliPath = resolveAbsoluteBinaryPath(workerCli);
+  const localCliCandidate = resolve(cwd, 'bin', workerCli);
+  const resolvedCliPath = existsSync(localCliCandidate)
+    ? localCliCandidate
+    : resolveAbsoluteBinaryPath(workerCli, effectiveEnv);
   const workerEnv: Record<string, string> = {
     OMX_TEAM_WORKER: `${teamName}/worker-${workerIndex}`,
     [OMX_LEADER_NODE_PATH_ENV]: resolveLeaderNodePath(),
@@ -1256,6 +1259,7 @@ export function waitForWorkerReady(
     if (promptDismissed) {
       delayMs = initialBackoffMs;
       promptDismissed = false;
+      continue;
     }
     const remaining = timeoutMs - (Date.now() - startedAt);
     if (remaining <= 0) break;
