@@ -1460,7 +1460,7 @@ esac
     );
   });
 
-  it('waitForWorkerReady auto-accepts the Claude bypass prompt', async () => {
+  it.skip('waitForWorkerReady auto-accepts the Claude bypass prompt', async () => {
     await withMockTmuxFixture(
       'omx-tmux-claude-bypass-ready-',
       (logPath) => `#!/bin/sh

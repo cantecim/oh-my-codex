@@ -4,25 +4,16 @@ import { spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  readJson,
+  withTempDir,
+  writeJson,
+} from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
-async function withTempWorkingDir(run: (cwd: string) => Promise<void>): Promise<void> {
-  const cwd = await mkdtemp(join(tmpdir(), 'omx-notify-tmux-heal-'));
-  try {
-    await run(cwd);
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-}
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(path, JSON.stringify(value, null, 2));
-}
-
-async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, 'utf-8')) as T;
-}
+const withTempWorkingDir = (run: (cwd: string) => Promise<void>): Promise<void> =>
+  withTempDir('omx-notify-tmux-heal-', run);
 
 describe('notify-hook tmux target healing', () => {
   it('falls back to global mode state when scoped session has no allowed active mode', async () => {

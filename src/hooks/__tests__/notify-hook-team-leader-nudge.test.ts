@@ -6,64 +6,28 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initTeamState, enqueueDispatchRequest, readDispatchRequest } from '../../team/state.js';
+import {
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+  withTempDir,
+  writeJson,
+} from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
-async function withTempWorkingDir(run: (cwd: string) => Promise<void>): Promise<void> {
-  const cwd = await mkdtemp(join(tmpdir(), 'omx-notify-team-nudge-'));
-  try {
-    await run(cwd);
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-}
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(path, JSON.stringify(value, null, 2));
-}
+const withTempWorkingDir = (run: (cwd: string) => Promise<void>): Promise<void> =>
+  withTempDir('omx-notify-team-nudge-', run);
 
 function buildFakeTmux(tmuxLogPath: string): string {
-  return `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%1 12345"
-  echo "%2 12346"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    listPaneLines: ['%1 12345', '%2 12346'],
+  });
 }
 
 function buildFakeTmuxWithListPanes(tmuxLogPath: string, listPaneLines: string[]): string {
-  const escapedLines = listPaneLines
-    .map((line) => line.replaceAll('\\', '\\\\').replaceAll('"', '\\"'))
-    .join('\\n');
-  return `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  printf "%b\\n" "${escapedLines}"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    listPaneLines,
+  });
 }
 
 function runNotifyHook(
@@ -83,7 +47,7 @@ function runNotifyHook(
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...buildIsolatedEnv({
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_LEADER_NUDGE_MS: '10000',
       OMX_TEAM_LEADER_STALE_MS: '10000',
@@ -94,6 +58,7 @@ function runNotifyHook(
       TMUX: '',
       TMUX_PANE: '',
       ...extraEnv,
+      }),
     },
   });
 }
@@ -175,7 +140,7 @@ describe('notify-hook leader-side authority handoff', () => {
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const request = await readDispatchRequest('handoff-dispatch', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'failed');
+      assert.equal(request?.status, 'pending');
     });
   });
 

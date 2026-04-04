@@ -6,23 +6,19 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildTmuxSessionName } from '../../cli/index.js';
+import {
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+  withTempDir,
+  writeJson,
+} from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'];
 const NEXT_I_SHOULD_RESPONSE = 'Next I should update the focused tests.';
 
-async function withTempWorkingDir(run: (cwd: string) => Promise<void>): Promise<void> {
-  const cwd = await mkdtemp(join(tmpdir(), 'omx-auto-nudge-'));
-  try {
-    await run(cwd);
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-}
-
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(path, JSON.stringify(value, null, 2));
-}
+const withTempWorkingDir = (run: (cwd: string) => Promise<void>): Promise<void> =>
+  withTempDir('omx-auto-nudge-', run);
 
 function readLinuxStartTicks(pid: number): number | null {
   try {
@@ -65,59 +61,19 @@ function escapeRegex(value: string): string {
   return value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
 }
 
-/**
- * Build a fake tmux binary that logs all invocations and optionally returns
- * capture-pane content from OMX_TEST_CAPTURE_FILE.
- */
 function buildFakeTmux(tmuxLogPath: string, paneInMode: '0' | '1' = '0'): string {
-  return `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="\$1"
-shift || true
-if [[ "\$cmd" == "capture-pane" ]]; then
-  if [[ -n "\${OMX_TEST_CAPTURE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_FILE}" ]]; then
-    cat "\${OMX_TEST_CAPTURE_FILE}"
-  fi
-  exit 0
-fi
-if [[ "\$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "\$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while [[ "\$#" -gt 0 ]]; do
-    case "\$1" in
-      -p) shift ;;
-      -t) target="\$2"; shift 2 ;;
-      *) format="\$1"; shift ;;
-    esac
-  done
-  if [[ "\$format" == "#{pane_in_mode}" ]]; then
-    echo "${paneInMode}"
-    exit 0
-  fi
-  if [[ "\$format" == "#{pane_current_command}" && "\$target" == "%99" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "\$format" == "#{pane_start_command}" && "\$target" == "%99" ]]; then
-    echo "codex --model gpt-5"
-    exit 0
-  fi
-  if [[ "\$format" == "#S" ]]; then
-    echo "${'${OMX_TEST_TMUX_SESSION_NAME:-devsess}'}"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "\$cmd" == "list-panes" ]]; then
-  echo "%1 12345"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    defaultProbe: {
+      paneInMode,
+      sessionName: 'devsess',
+    },
+    paneProbes: {
+      '%99': {
+        currentCommand: 'node',
+        startCommand: 'codex --model gpt-5',
+      },
+    },
+  });
 }
 
 function runNotifyHook(
@@ -156,7 +112,7 @@ function runNotifyHook(
     encoding: 'utf8',
     timeout: 15_000,
     env: {
-      ...process.env,
+      ...buildIsolatedEnv({
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
       ...(extraEnv.OMX_TEST_UNMANAGED_SESSION !== '1' && !extraEnv.OMX_TEAM_WORKER ? { OMX_SESSION_ID: 'sess-managed' } : {}),
@@ -166,6 +122,7 @@ function runNotifyHook(
       OMX_TEAM_LEADER_NUDGE_MS: '9999999',
       OMX_TEAM_LEADER_STALE_MS: '9999999',
       ...extraEnv,
+      }),
     },
   });
 }
@@ -173,7 +130,7 @@ function runNotifyHook(
 describe('notify-hook auto-nudge', () => {
 
   it('does not nudge immediately by default before a real stall window elapses', async () => {
-    await withTempWorkingDir(async (cwd) => {
+    await withTempDir('omx-auto-nudge-', async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
       const logsDir = join(omxDir, 'logs');
@@ -211,7 +168,7 @@ describe('notify-hook auto-nudge', () => {
   });
 
   it('sends nudge when stall pattern detected in last-assistant-message', async () => {
-    await withTempWorkingDir(async (cwd) => {
+    await withTempDir('omx-auto-nudge-', async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
       const logsDir = join(omxDir, 'logs');

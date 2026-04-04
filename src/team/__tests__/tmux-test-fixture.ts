@@ -41,12 +41,21 @@ function applyTmuxEnv(snapshot: TmuxEnvSnapshot): void {
   else delete process.env.TMUX_PANE;
 }
 
+function scrubTmuxEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...source,
+    TMUX: undefined,
+    TMUX_PANE: undefined,
+  };
+}
+
 function runTmux(
   args: string[],
   options: { ignoreTmuxEnv?: boolean; env?: NodeJS.ProcessEnv; serverName?: string } = {},
 ): string {
   const env = options.env
-    ?? (options.ignoreTmuxEnv ? { ...process.env, TMUX: undefined, TMUX_PANE: undefined } : process.env);
+    ? (options.ignoreTmuxEnv ? scrubTmuxEnv(options.env) : options.env)
+    : (options.ignoreTmuxEnv ? scrubTmuxEnv(process.env) : process.env);
   const argv = options.serverName ? ['-L', options.serverName, ...args] : args;
   const result = spawnSync('tmux', argv, {
     encoding: 'utf-8',
@@ -134,8 +143,11 @@ export async function withTempTmuxSession<T>(
   }
 
   const socketPath = runTmux(['display-message', '-p', '-t', leaderPaneId, '#{socket_path}'], tmuxOptions);
-  process.env.TMUX = `${socketPath},${process.pid},0`;
-  process.env.TMUX_PANE = leaderPaneId;
+  const fixtureEnv = {
+    TMUX: `${socketPath},${process.pid},0`,
+    TMUX_PANE: leaderPaneId,
+  } satisfies Required<TmuxEnvSnapshot>;
+  applyTmuxEnv(fixtureEnv);
 
   const fixture: TempTmuxSessionFixture = {
     sessionName,
@@ -145,8 +157,8 @@ export async function withTempTmuxSession<T>(
     socketPath,
     serverKind,
     env: {
-      TMUX: process.env.TMUX,
-      TMUX_PANE: leaderPaneId,
+      TMUX: fixtureEnv.TMUX,
+      TMUX_PANE: fixtureEnv.TMUX_PANE,
     },
     sessionExists: (targetSessionName = sessionName) => tmuxSessionExists(targetSessionName, serverName || undefined),
   };

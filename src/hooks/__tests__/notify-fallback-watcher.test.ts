@@ -3,11 +3,15 @@ import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { initTeamState, enqueueDispatchRequest, readDispatchRequest } from '../../team/state.js';
 import { writeSessionStart } from '../session.js';
+import {
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+} from '../../test-support/shared-harness.js';
 
 async function appendLine(path: string, line: object): Promise<void> {
   const prev = await readFile(path, 'utf-8');
@@ -67,102 +71,26 @@ async function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number = 
 
 function buildFakeTmux(
   tmuxLogPath: string,
-  options: { failSendKeys?: boolean; failSendKeysMatch?: string } = {},
+  options: { failSendKeys?: boolean; failSendKeysMatch?: string; listPaneLines?: string[] } = {},
 ): string {
-  return `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "capture-pane" ]]; then
-  if [[ -n "\${OMX_TEST_CAPTURE_SEQUENCE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" ]]; then
-    counterFile="\${OMX_TEST_CAPTURE_COUNTER_FILE:-\${OMX_TEST_CAPTURE_SEQUENCE_FILE}.idx}"
-    idx=0
-    if [[ -f "$counterFile" ]]; then idx="$(cat "$counterFile")"; fi
-    lineNo=$((idx + 1))
-    line="$(sed -n "\${lineNo}p" "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" || true)"
-    if [[ -z "$line" ]]; then
-      line="$(tail -n 1 "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" || true)"
-    fi
-    printf "%s\\n" "$line"
-    echo "$lineNo" > "$counterFile"
-    exit 0
-  fi
-  if [[ -n "\${OMX_TEST_CAPTURE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_FILE}" ]]; then
-    cat "\${OMX_TEST_CAPTURE_FILE}"
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  fmt=""
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      -t)
-        shift
-        target="$1"
-        ;;
-      *)
-        fmt="$1"
-        ;;
-    esac
-    shift || true
-  done
-  if [[ "$fmt" == "#{pane_in_mode}" ]]; then
-    echo "0"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_id}" ]]; then
-    echo "\${target:-%42}"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_path}" ]]; then
-    dirname "${tmuxLogPath}"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_command}" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$fmt" == "#S" ]]; then
-    echo "session-test"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  sendKeysArgs="$*"
-  if [[ "${options.failSendKeys === true ? '1' : '0'}" == "1" ]]; then
-    echo "send failed" >&2
-    exit 1
-  fi
-  if [[ -n "${options.failSendKeysMatch || ''}" && "$sendKeysArgs" == *"${options.failSendKeysMatch || ''}"* ]]; then
-    echo "send failed" >&2
-    exit 1
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%42 1"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    defaultProbe: {
+      paneInMode: '0',
+      paneId: '%42',
+      currentPath: dirname(tmuxLogPath),
+      currentCommand: 'codex',
+      sessionName: 'session-test',
+    },
+    listPaneLines: options.listPaneLines ?? ['%42 1'],
+    failSendKeys: options.failSendKeys,
+    failSendKeysMatch: options.failSendKeysMatch,
+  });
 }
 
 function buildCleanNotifyEnv(
   overrides: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    OMX_TEAM_WORKER: '',
-    OMX_TEAM_STATE_ROOT: '',
-    OMX_TEAM_LEADER_CWD: '',
-    OMX_MODEL_INSTRUCTIONS_FILE: '',
-    TMUX: '',
-    TMUX_PANE: '',
-    ...overrides,
-  };
+  return buildIsolatedEnv(overrides);
 }
 
 describe('notify-fallback watcher', () => {
@@ -675,8 +603,11 @@ describe('notify-fallback watcher', () => {
     try {
       await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state', 'team', 'dispatch-team'), { recursive: true });
+      await mkdir(join(wd, '.omx', 'state', 'team', 'dispatch-team', 'workers', 'worker-1'), { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath, {
+        listPaneLines: ['%10 12345'],
+      }));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
       await writeFile(join(wd, '.omx', 'state', 'team-state.json'), JSON.stringify({
@@ -692,6 +623,14 @@ describe('notify-fallback watcher', () => {
         name: 'dispatch-team',
         tmux_session: 'omx-team-dispatch-team',
         leader_pane_id: '%42',
+        workers: [
+          { name: 'worker-1', index: 1, pane_id: '%10' },
+        ],
+      }, null, 2));
+      await writeFile(join(wd, '.omx', 'state', 'team', 'dispatch-team', 'workers', 'worker-1', 'status.json'), JSON.stringify({
+        state: 'working',
+        current_task_id: '1',
+        updated_at: new Date(Date.now() - 300_000).toISOString(),
       }, null, 2));
 
       const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
