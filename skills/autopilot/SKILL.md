@@ -50,7 +50,7 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 - In BMAD campaign mode, `bmad-native` execution is an explicit compatibility backend, not the default path; it must be selected by runtime configuration/metadata and still runs under OMX orchestration.
 - In BMAD campaign mode, never guess the active story when multiple candidates remain unresolved; stop and report ambiguity instead.
 - In BMAD campaign mode, do not write BMAD story/sprint artifacts directly; delegate bounded writeback to `$ralph` or `$team`, then re-read BMAD artifacts to confirm completion.
-- In BMAD campaign mode, implementation-side hooks may write OMX-authored story/epic summaries under `_bmad-output/implementation-artifacts/`; these enrich evidence but do not replace BMAD delivery truth.
+- In BMAD campaign mode, implementation-side hooks may write OMX-authored story/epic summaries under the configured BMAD `output_folder` implementation-artifacts directory; these enrich evidence but do not replace BMAD delivery truth.
 </Execution_Policy>
 
 <Steps>
@@ -68,7 +68,7 @@ Most non-trivial software tasks require coordinated phases: understanding requir
    - Carry the snapshot path into autopilot artifacts/state so all phases share grounded context.
 
 0.5 **BMAD routing gate (evaluate before entering the standard non-BMAD phase stack when BMAD artifacts are present)**:
-   - Detect BMAD from `_bmad/`, `_bmad-output/`, `project-context.md`, planning artifacts, and implementation artifacts.
+   - Detect BMAD from `_bmad/`, `_bmad/core/config.yaml`, the configured `output_folder` (fallback `_bmad-output`), `project-context.md`, planning artifacts, and implementation artifacts.
    - Reconcile BMAD integration state before choosing a path.
    - If BMAD is detected but **not** execution-ready:
      - stop before expansion/planning-heavy implementation flow begins

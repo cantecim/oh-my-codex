@@ -14,6 +14,7 @@ function makeIndex(projectRoot: string, overrides: Partial<BmadArtifactIndex> = 
     detected: true,
     detectionSignals: ['_bmad-output'],
     artifactIndexVersion: 'v1',
+    outputRoot: '_bmad-output',
     projectContextPath: '_bmad-output/project-context.md',
     prdPaths: ['_bmad-output/planning-artifacts/PRD.md'],
     uxPaths: [],
@@ -47,6 +48,7 @@ function makeState(overrides: Partial<BmadPersistedState> = {}): BmadPersistedSt
 function makeContext(overrides: Partial<BmadExecutionContext> = {}): BmadExecutionContext {
   return {
     detected: true,
+    outputRoot: '_bmad-output',
     projectContextPath: '_bmad-output/project-context.md',
     architecturePaths: ['_bmad-output/planning-artifacts/architecture.md'],
     activeStoryPath: null,

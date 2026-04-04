@@ -27,6 +27,7 @@ export interface BmadArtifactIndex {
   detected: boolean;
   detectionSignals: string[];
   artifactIndexVersion: string;
+  outputRoot: string | null;
   projectContextPath: string | null;
   prdPaths: string[];
   uxPaths: string[];
@@ -81,6 +82,7 @@ export interface BmadAcceptanceCriteriaResult {
 
 export interface BmadExecutionContext {
   detected: boolean;
+  outputRoot: string | null;
   projectContextPath: string | null;
   architecturePaths: string[];
   activeStoryPath: string | null;

@@ -52,6 +52,20 @@ describe('BMAD detection', () => {
     }
   });
 
+  it('detects configured output_folder from core config', async () => {
+    const root = await makeTempProject('omx-bmad-detect-');
+    try {
+      await writeProjectFile(root, '_bmad/core/config.yaml', 'output_folder: ".custom-output"\n');
+      await mkdir(join(root, '.custom-output'), { recursive: true });
+      const detected = detectBmadProject(root);
+      assert.equal(detected.detected, true);
+      assert.ok(detected.detectionSignals.includes('_bmad/core/config.yaml'));
+      assert.ok(detected.detectionSignals.includes('.custom-output'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('returns no detection for non-BMAD repositories', async () => {
     const root = await makeTempProject('omx-bmad-detect-');
     try {
@@ -77,6 +91,7 @@ describe('BMAD artifact indexing and projection', () => {
       await writeProjectFile(root, '_bmad-output/implementation-artifacts/sprint-status.yaml', 'status: active');
 
       const index = await buildBmadArtifactIndex(root);
+      assert.equal(index.outputRoot, '_bmad-output');
       assert.equal(index.projectContextPath, '_bmad-output/project-context.md');
       assert.deepEqual(index.prdPaths, ['_bmad-output/planning-artifacts/PRD.md']);
       assert.deepEqual(index.architecturePaths, ['_bmad-output/planning-artifacts/architecture.md']);
@@ -85,6 +100,26 @@ describe('BMAD artifact indexing and projection', () => {
       assert.deepEqual(index.sprintStatusPaths, ['_bmad-output/implementation-artifacts/sprint-status.yaml']);
       assert.ok(index.implementationArtifactPaths.includes('_bmad-output/implementation-artifacts/sprint-status.yaml'));
       assert.ok(index.pathMetadata['_bmad-output/project-context.md']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('indexes artifacts from configured output_folder', async () => {
+    const root = await makeTempProject('omx-bmad-index-');
+    try {
+      await writeProjectFile(root, '_bmad/core/config.yaml', 'output_folder: custom-output\n');
+      await writeProjectFile(root, 'custom-output/project-context.md', '# context');
+      await writeProjectFile(root, 'custom-output/planning-artifacts/PRD.md', '# prd');
+      await writeProjectFile(root, 'custom-output/planning-artifacts/architecture.md', '# arch');
+      await writeProjectFile(root, 'custom-output/planning-artifacts/epics/story-login.md', '# story');
+      await writeProjectFile(root, 'custom-output/implementation-artifacts/sprint-status.yaml', 'status: active');
+
+      const index = await buildBmadArtifactIndex(root);
+      assert.equal(index.outputRoot, 'custom-output');
+      assert.equal(index.projectContextPath, 'custom-output/project-context.md');
+      assert.deepEqual(index.storyPaths, ['custom-output/planning-artifacts/epics/story-login.md']);
+      assert.deepEqual(index.sprintStatusPaths, ['custom-output/implementation-artifacts/sprint-status.yaml']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

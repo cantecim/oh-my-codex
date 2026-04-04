@@ -30,6 +30,7 @@ export async function resolveBmadExecutionContext(
     const writebackBlockedByDrift = state.driftStatus === 'medium' || state.driftStatus === 'hard';
     return {
       detected: false,
+      outputRoot: index.outputRoot,
       projectContextPath: null,
       architecturePaths: [],
       activeStoryPath: null,
@@ -45,14 +46,15 @@ export async function resolveBmadExecutionContext(
 
   const activeStory = resolveActiveStoryPath(index, state);
   const sprintStatusPath = resolveUniquePath(index.sprintStatusPaths);
-  const implementationArtifactsRoot = existsSync(join(projectRoot, '_bmad-output', 'implementation-artifacts'))
-    ? '_bmad-output/implementation-artifacts'
+  const implementationArtifactsRoot = index.outputRoot && existsSync(join(projectRoot, index.outputRoot, 'implementation-artifacts'))
+    ? `${index.outputRoot}/implementation-artifacts`
     : null;
   const acceptance = await parseBmadAcceptanceCriteria(projectRoot, activeStory.path);
   const writebackBlockedByDrift = state.driftStatus === 'medium' || state.driftStatus === 'hard';
 
   return {
     detected: true,
+    outputRoot: index.outputRoot,
     projectContextPath: index.projectContextPath,
     architecturePaths: [...index.architecturePaths],
     activeStoryPath: activeStory.path,

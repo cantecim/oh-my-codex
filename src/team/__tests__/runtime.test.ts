@@ -1306,6 +1306,7 @@ process.on('SIGTERM', () => process.exit(0));
             worktreeMode: { enabled: true, detached: true, name: null },
             bmadContext: {
               detected: true,
+              outputRoot: '_bmad-output',
               projectContextPath: '_bmad-output/project-context.md',
               architecturePaths: ['_bmad-output/planning-artifacts/architecture.md'],
               activeStoryPath: '_bmad-output/planning-artifacts/epics/story-login.md',

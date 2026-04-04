@@ -48,8 +48,8 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - BMAD writeback is bounded to:
   - story artifact completion block
   - sprint-status update when conservative mapping is possible
-  - implementation summaries under `_bmad-output/implementation-artifacts/`
-- Ralph may also emit implementation-side story hook summaries under `_bmad-output/implementation-artifacts/`; these are evidence artifacts, not planning-authority mutations.
+  - implementation summaries under the configured BMAD `output_folder` implementation-artifacts directory
+- Ralph may also emit implementation-side story hook summaries under the configured BMAD `output_folder` implementation-artifacts directory; these are evidence artifacts, not planning-authority mutations.
 - Never mutate BMAD PRD, UX, architecture, or `project-context.md`.
 </Execution_Policy>
 

@@ -3,13 +3,11 @@ import { existsSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
 import type { BmadArtifactIndex, BmadDetectionResult, BmadPathMetadata, BmadTrack } from './contracts.js';
+import { DEFAULT_BMAD_OUTPUT_ROOT, readBmadOutputRoot } from './config.js';
 
-const BMAD_STRONG_SIGNALS = [
+const STATIC_BMAD_STRONG_SIGNALS = [
   '_bmad',
-  '_bmad-output',
-  '_bmad-output/project-context.md',
-  '_bmad-output/planning-artifacts',
-  '_bmad-output/implementation-artifacts',
+  '_bmad/core/config.yaml',
 ] as const;
 
 const PRD_PATTERN = /(?:^|[-_.])prd(?:[-_.]|$)|^prd\.md$/i;
@@ -49,7 +47,15 @@ async function walkFiles(root: string): Promise<string[]> {
 }
 
 function detectSignals(projectRoot: string): string[] {
-  return BMAD_STRONG_SIGNALS.filter((signal) => existsSync(join(projectRoot, signal)));
+  const configuredOutputRoot = readBmadOutputRoot(projectRoot);
+  const outputRoot = configuredOutputRoot ?? DEFAULT_BMAD_OUTPUT_ROOT;
+  const dynamicSignals = [
+    outputRoot,
+    `${outputRoot}/project-context.md`,
+    `${outputRoot}/planning-artifacts`,
+    `${outputRoot}/implementation-artifacts`,
+  ];
+  return [...STATIC_BMAD_STRONG_SIGNALS, ...dynamicSignals].filter((signal) => existsSync(join(projectRoot, signal)));
 }
 
 function classifyTrack(index: Pick<BmadArtifactIndex, 'architecturePaths' | 'prdPaths' | 'uxPaths' | 'epicPaths'>): BmadTrack {
@@ -100,9 +106,10 @@ export function detectBmadProject(projectRoot: string): BmadDetectionResult {
 
 export async function buildBmadArtifactIndex(projectRoot: string): Promise<BmadArtifactIndex> {
   const detection = detectBmadProject(projectRoot);
-  const planningRoot = join(projectRoot, '_bmad-output', 'planning-artifacts');
-  const implementationRoot = join(projectRoot, '_bmad-output', 'implementation-artifacts');
-  const projectContextPath = join(projectRoot, '_bmad-output', 'project-context.md');
+  const outputRoot = readBmadOutputRoot(projectRoot) ?? DEFAULT_BMAD_OUTPUT_ROOT;
+  const planningRoot = join(projectRoot, outputRoot, 'planning-artifacts');
+  const implementationRoot = join(projectRoot, outputRoot, 'implementation-artifacts');
+  const projectContextPath = join(projectRoot, outputRoot, 'project-context.md');
 
   const planningFiles = await walkFiles(planningRoot);
   const implementationFiles = await walkFiles(implementationRoot);
@@ -142,6 +149,7 @@ export async function buildBmadArtifactIndex(projectRoot: string): Promise<BmadA
     detected: detection.detected,
     detectionSignals: detection.detectionSignals,
     artifactIndexVersion,
+    outputRoot,
     projectContextPath: existsSync(projectContextPath)
       ? normalizedRelativePath(projectRoot, projectContextPath)
       : null,

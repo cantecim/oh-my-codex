@@ -20,6 +20,7 @@ function baseIndex(root: string): BmadArtifactIndex {
     detected: true,
     detectionSignals: ['_bmad-output'],
     artifactIndexVersion: 'v1',
+    outputRoot: '_bmad-output',
     projectContextPath: '_bmad-output/project-context.md',
     prdPaths: ['_bmad-output/planning-artifacts/PRD.md'],
     uxPaths: [],

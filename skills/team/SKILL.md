@@ -194,8 +194,8 @@ When BMAD is active:
 - allowed BMAD-side writes are limited to:
   - story completion block
   - sprint-status update when conservative mapping succeeds
-  - OMX implementation summaries under `_bmad-output/implementation-artifacts/`
-  - OMX implementation-side story hook summaries under `_bmad-output/implementation-artifacts/`
+  - OMX implementation summaries under the configured BMAD `output_folder` implementation-artifacts directory
+  - OMX implementation-side story hook summaries under the configured BMAD `output_folder` implementation-artifacts directory
 - if BMAD story context is ambiguous, surface that ambiguity in leader-visible state instead of assigning different guesses to workers
 
 ### Team worker model + thinking resolution (current contract)
