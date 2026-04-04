@@ -6,6 +6,7 @@
 
 import type { HudRenderContext, HudPreset } from './types.js';
 import { green, yellow, cyan, dim, bold, getRalphColor, isColorEnabled, RESET } from './colors.js';
+import { basename } from 'path';
 
 const SEP = dim(' | ');
 const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -57,7 +58,32 @@ function renderUltrawork(ctx: HudRenderContext): string | null {
 function renderAutopilot(ctx: HudRenderContext): string | null {
   if (!ctx.autopilot) return null;
   const phase = sanitizeDynamicText(ctx.autopilot.current_phase || 'active') || 'active';
-  return yellow(`autopilot:${phase}`);
+  let label = `autopilot:${phase}`;
+
+  if (ctx.autopilot.bmad_detected) {
+    if (phase === 'bmad-campaign' && ctx.autopilot.bmad_active_story_path) {
+      const storyName = sanitizeDynamicText(
+        basename(ctx.autopilot.bmad_active_story_path).replace(/\.md$/i, ''),
+      );
+      if (storyName) {
+        label += `:${storyName}`;
+      }
+    } else if (phase === 'blocked' || phase === 'failed') {
+      if (
+        ctx.autopilot.bmad_context_blocked_by_ambiguity
+        || ctx.autopilot.bmad_stop_reason === 'ambiguous_active_story'
+      ) {
+        label += ':ambig';
+      } else if (
+        ctx.autopilot.bmad_writeback_blocked
+        || ctx.autopilot.bmad_stop_reason === 'writeback_blocked'
+      ) {
+        label += ':drift';
+      }
+    }
+  }
+
+  return yellow(label);
 }
 
 function renderRalplan(ctx: HudRenderContext): string | null {

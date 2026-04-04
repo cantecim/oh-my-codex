@@ -42,3 +42,11 @@ export type {
   RunAutopilotWithRoutingOptions,
   RunBmadAutopilotCampaignOptions,
 } from './bmad-autopilot.js';
+export {
+  createDefaultAutopilotStages,
+  runAutopilotSkillRuntimeBridge,
+} from './autopilot-runtime-bridge.js';
+export type {
+  CreateDefaultAutopilotStagesOptions,
+  RunAutopilotSkillRuntimeBridgeOptions,
+} from './autopilot-runtime-bridge.js';

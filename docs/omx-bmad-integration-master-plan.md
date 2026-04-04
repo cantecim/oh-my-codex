@@ -126,18 +126,18 @@ OMX must detect discrepancies between runtime assumptions and BMAD artifact stat
 
 ## Authority Matrix
 
-| Domain | Authority | Notes |
-| --- | --- | --- |
-| Runtime mode and active loop | OMX | Never delegated to BMAD |
-| Worker/team state | OMX | Runtime-only concern |
-| Retry and verification lifecycle | OMX | Runtime-only concern |
-| Project context artifact | BMAD | OMX may cache a summary |
-| PRD / UX / architecture | BMAD | Delivery truth |
-| Epic/story definitions | BMAD | Delivery truth |
-| Sprint status | BMAD | Delivery progression truth |
-| Active story projection | BMAD-derived, OMX-cached | BMAD wins on conflict |
-| Drift status | OMX | Integration concern |
-| Writeback status | OMX | Integration concern |
+| Domain                           | Authority                | Notes                      |
+| -------------------------------- | ------------------------ | -------------------------- |
+| Runtime mode and active loop     | OMX                      | Never delegated to BMAD    |
+| Worker/team state                | OMX                      | Runtime-only concern       |
+| Retry and verification lifecycle | OMX                      | Runtime-only concern       |
+| Project context artifact         | BMAD                     | OMX may cache a summary    |
+| PRD / UX / architecture          | BMAD                     | Delivery truth             |
+| Epic/story definitions           | BMAD                     | Delivery truth             |
+| Sprint status                    | BMAD                     | Delivery progression truth |
+| Active story projection          | BMAD-derived, OMX-cached | BMAD wins on conflict      |
+| Drift status                     | OMX                      | Integration concern        |
+| Writeback status                 | OMX                      | Integration concern        |
 
 ## Skill Behavior in BMAD-Aware Mode
 

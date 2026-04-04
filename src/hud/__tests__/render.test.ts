@@ -144,6 +144,48 @@ describe('renderHud – autopilot', () => {
     const result = renderHud(emptyCtx(), 'focused');
     assert.ok(!result.includes('autopilot'));
   });
+
+  it('renders BMAD campaign autopilot with the active story slug', () => {
+    const ctx = {
+      ...emptyCtx(),
+      autopilot: {
+        active: true,
+        current_phase: 'bmad-campaign',
+        bmad_detected: true,
+        bmad_active_story_path: '_bmad-output/planning-artifacts/epics/story-login.md',
+      },
+    };
+    const result = renderHud(ctx, 'focused');
+    assert.ok(result.includes('autopilot:bmad-campaign:story-login'));
+  });
+
+  it('renders blocked BMAD autopilot state with ambiguity suffix', () => {
+    const ctx = {
+      ...emptyCtx(),
+      autopilot: {
+        active: false,
+        current_phase: 'blocked',
+        bmad_detected: true,
+        bmad_context_blocked_by_ambiguity: true,
+      },
+    };
+    const result = renderHud(ctx, 'focused');
+    assert.ok(result.includes('autopilot:blocked:ambig'));
+  });
+
+  it('renders blocked BMAD autopilot state with drift suffix when writeback is blocked', () => {
+    const ctx = {
+      ...emptyCtx(),
+      autopilot: {
+        active: false,
+        current_phase: 'blocked',
+        bmad_detected: true,
+        bmad_writeback_blocked: true,
+      },
+    };
+    const result = renderHud(ctx, 'focused');
+    assert.ok(result.includes('autopilot:blocked:drift'));
+  });
 });
 
 // ── Ralplan ───────────────────────────────────────────────────────────────────

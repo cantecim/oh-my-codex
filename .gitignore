@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.history/
 .omc/state/
 .omc/prompts/
 .omc/logs/

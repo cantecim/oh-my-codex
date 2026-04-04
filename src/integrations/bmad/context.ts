@@ -27,6 +27,7 @@ export async function resolveBmadExecutionContext(
   state: BmadPersistedState,
 ): Promise<BmadExecutionContext> {
   if (!state.detected) {
+    const writebackBlockedByDrift = state.driftStatus === 'medium' || state.driftStatus === 'hard';
     return {
       detected: false,
       projectContextPath: null,
@@ -38,7 +39,7 @@ export async function resolveBmadExecutionContext(
       implementationArtifactsRoot: null,
       contextBlockedByAmbiguity: false,
       writebackSupported: false,
-      writebackBlockedByDrift: false,
+      writebackBlockedByDrift,
     };
   }
 

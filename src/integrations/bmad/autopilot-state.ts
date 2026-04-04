@@ -5,6 +5,7 @@ export interface AutopilotBmadStateFields {
   bmad_detected: boolean;
   bmad_phase?: BmadPhase;
   bmad_ready_for_execution?: boolean;
+  bmad_recommendation?: string | null;
   bmad_campaign_active?: boolean;
   bmad_active_story_path?: string | null;
   bmad_active_epic_path?: string | null;
@@ -24,6 +25,7 @@ export function buildAutopilotBmadStateFields(
     bmad_detected: fields.bmad_detected,
     bmad_phase: fields.bmad_phase,
     bmad_ready_for_execution: fields.bmad_ready_for_execution,
+    bmad_recommendation: fields.bmad_recommendation ?? null,
     bmad_campaign_active: fields.bmad_campaign_active,
     bmad_active_story_path: fields.bmad_active_story_path ?? null,
     bmad_active_epic_path: fields.bmad_active_epic_path ?? null,

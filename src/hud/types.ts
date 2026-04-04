@@ -19,6 +19,14 @@ export interface UltraworkStateForHud {
 export interface AutopilotStateForHud {
   active: boolean;
   current_phase?: string;
+  bmad_detected?: boolean;
+  bmad_ready_for_execution?: boolean;
+  bmad_recommendation?: string | null;
+  bmad_campaign_active?: boolean;
+  bmad_active_story_path?: string | null;
+  bmad_stop_reason?: string | null;
+  bmad_context_blocked_by_ambiguity?: boolean;
+  bmad_writeback_blocked?: boolean;
 }
 
 /** Ralplan state for HUD display */

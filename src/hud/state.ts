@@ -105,7 +105,24 @@ export async function readUltraworkState(cwd: string): Promise<UltraworkStateFor
 
 export async function readAutopilotState(cwd: string): Promise<AutopilotStateForHud | null> {
   const state = await readScopedModeState<AutopilotStateForHud>(cwd, 'autopilot');
-  return state?.active ? state : null;
+  if (!state) return null;
+
+  if (state.active) return state;
+
+  if (state.bmad_detected === true) {
+    const phase = state.current_phase;
+    if (
+      phase === 'planning-required'
+      || phase === 'bmad-campaign'
+      || phase === 'blocked'
+      || phase === 'failed'
+      || phase === 'cancelled'
+    ) {
+      return state;
+    }
+  }
+
+  return null;
 }
 
 export async function readRalplanState(cwd: string): Promise<RalplanStateForHud | null> {

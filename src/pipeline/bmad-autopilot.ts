@@ -174,6 +174,7 @@ export async function runBmadAutopilotCampaign(
   const initialContext = await resolveBmadExecutionContext(cwd, reconciled.artifactIndex, reconciled.state);
 
   if (!readiness.readyForExecution) {
+    const recommendation = mapReadinessToRecommendation(readiness.gaps);
     await startMode('autopilot', options.task, 1, cwd);
     await updateModeState('autopilot', {
       active: false,
@@ -183,6 +184,7 @@ export async function runBmadAutopilotCampaign(
         bmad_detected: true,
         bmad_phase: reconciled.state.phase,
         bmad_ready_for_execution: false,
+        bmad_recommendation: recommendation,
         bmad_campaign_active: false,
         bmad_active_story_path: initialContext.activeStoryPath,
         bmad_active_epic_path: initialContext.activeEpicPath,
@@ -203,11 +205,11 @@ export async function runBmadAutopilotCampaign(
       artifacts: {
         bmad: {
           readiness,
-          recommendation: mapReadinessToRecommendation(readiness.gaps),
+          recommendation,
         },
       },
       stopReason: 'planning_required',
-      recommendation: mapReadinessToRecommendation(readiness.gaps),
+      recommendation,
       completedStoryPaths: [],
       remainingStoryPaths: reconciled.artifactIndex.storyPaths,
     };
@@ -269,7 +271,7 @@ export async function runBmadAutopilotCampaign(
           bmad_remaining_story_paths: remainingStoryPaths,
           bmad_completed_story_paths: completedStoryPaths,
           bmad_stop_reason: stopReason,
-          bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity,
+          bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity || stopReason === 'ambiguous_active_story',
           bmad_writeback_blocked: beforeContext.writebackBlockedByDrift,
           bmad_campaign_iteration: iteration,
         }),
