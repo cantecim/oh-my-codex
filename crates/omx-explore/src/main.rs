@@ -699,6 +699,14 @@ fn validate_repo_paths(command_name: &str, args: &[String]) -> Result<(), String
     for operand in candidate_paths {
         let normalized = normalize_candidate_path(&repo_root, operand);
         if !normalized.starts_with(&repo_root) {
+            if let (Some(canonical_candidate), Some(canonical_repo_root)) = (
+                canonicalize_existing_prefix(&normalized),
+                canonical_repo_root.as_ref(),
+            ) {
+                if canonical_candidate.starts_with(canonical_repo_root) {
+                    continue;
+                }
+            }
             return Err(format!(
                 "path `{operand}` escapes the omx explore repository root {}",
                 repo_root.display()

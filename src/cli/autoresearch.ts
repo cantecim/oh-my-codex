@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
+import { toLegacyDisplayPath } from '../utils/display-path.js';
 import { ensureWorktree, planWorktreeTarget } from '../team/worktree.js';
 import { loadAutoresearchMissionContract } from '../autoresearch/contracts.js';
 import {
@@ -326,14 +327,14 @@ function launchAutoresearchInSplitPane(args: {
   const paneId = tmuxDisplay(args.currentPaneId, '#{pane_id}');
   if (!paneId) return false;
   const sessionName = tmuxDisplay(paneId, '#S');
-  const currentCwd = tmuxDisplay(paneId, '#{pane_current_path}') || args.repoRoot;
+  const currentCwd = toLegacyDisplayPath(tmuxDisplay(paneId, '#{pane_current_path}') || args.repoRoot);
   const existingHudPaneIds = listHudWatchPaneIdsInCurrentWindow(paneId);
 
   const omxPath = process.argv[1];
   if (!omxPath) return false;
   // Re-enter through the bare compatibility alias so the new pane executes immediately
   // instead of recursively taking the split-pane branch again.
-  const launchArgs = ['autoresearch', args.missionDir, ...args.codexArgs];
+  const launchArgs = ['autoresearch', toLegacyDisplayPath(args.missionDir), ...args.codexArgs];
   const command = [process.execPath, omxPath, ...launchArgs]
     .map((part) => `'${part.replace(/'/g, `'\\''`)}'`)
     .join(' ');

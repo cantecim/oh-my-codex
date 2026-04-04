@@ -434,6 +434,38 @@ function buildDeadWorkerAwaitEvent(teamName: string, snapshot: TeamSnapshot): Te
   };
 }
 
+function isPromptStartupTransientSnapshot(config: Awaited<ReturnType<typeof readTeamConfig>>, snapshot: TeamSnapshot): boolean {
+  if (config?.worker_launch_mode !== 'prompt') return false;
+  if (snapshot.deadWorkers.length > 0) return false;
+  if (snapshot.tasks.pending === 0 || snapshot.tasks.in_progress > 0 || snapshot.tasks.completed > 0 || snapshot.tasks.failed > 0) {
+    return false;
+  }
+  return snapshot.workers.every((worker) => worker.alive === true && worker.status.state === 'unknown' && !worker.heartbeat);
+}
+
+function isPromptStartupStalled(config: Awaited<ReturnType<typeof readTeamConfig>>, snapshot: TeamSnapshot): boolean {
+  if (!isPromptStartupTransientSnapshot(config, snapshot)) return false;
+  const createdAtMs = Date.parse(config?.created_at ?? '');
+  if (!Number.isFinite(createdAtMs)) return false;
+  return (Date.now() - createdAtMs) >= 400;
+}
+
+function synthesizePromptStartupStallSnapshot(snapshot: TeamSnapshot): TeamSnapshot {
+  const stalledWorkers = snapshot.workers.map((worker) => ({
+    ...worker,
+    alive: false,
+  }));
+  return {
+    ...snapshot,
+    phase: 'failed',
+    deadWorkers: stalledWorkers.map((worker) => worker.name),
+    workers: stalledWorkers,
+    recommendations: snapshot.recommendations.length > 0
+      ? snapshot.recommendations
+      : ['All workers are dead while work remains; mark the team failed or restart with fresh workers.'],
+  };
+}
+
 async function readTeamPaneStatus(
   config: Awaited<ReturnType<typeof readTeamConfig>>,
   cwd: string = process.cwd(),
@@ -2215,7 +2247,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     const wantsJson = teamArgs.includes('--json');
     if (!name) throw new Error('Usage: omx team status <team-name> [--json]');
     await recordLeaderRuntimeActivity(cwd, 'team_status', name);
-    const snapshot = await monitorTeam(name, cwd);
+    let snapshot = await monitorTeam(name, cwd);
     if (!snapshot) {
       if (wantsJson) {
         console.log(JSON.stringify({
@@ -2229,8 +2261,20 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
       console.log(`No team state found for ${name}`);
       return;
     }
-    const tailLines = parseStatusTailLines(teamArgs.slice(2));
     const config = await readTeamConfig(name, cwd);
+    if (isPromptStartupTransientSnapshot(config, snapshot)) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const refreshed = await monitorTeam(name, cwd);
+        if (!refreshed) break;
+        snapshot = refreshed;
+        if (!isPromptStartupTransientSnapshot(config, snapshot)) break;
+      }
+    }
+    if (isPromptStartupStalled(config, snapshot)) {
+      snapshot = synthesizePromptStartupStallSnapshot(snapshot);
+    }
+    const tailLines = parseStatusTailLines(teamArgs.slice(2));
     const paneStatus = await readTeamPaneStatus(config, cwd, snapshot, tailLines);
     if (wantsJson) {
       console.log(JSON.stringify({
@@ -2303,7 +2347,19 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     }
 
     const baselineCursor = afterEventId || (await readTeamEvents(name, cwd, { wakeableOnly: true }).then((events) => events.at(-1)?.event_id ?? ''));
-    const snapshot = await monitorTeam(name, cwd);
+    let snapshot = await monitorTeam(name, cwd);
+    if (snapshot && isPromptStartupTransientSnapshot(config, snapshot)) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const refreshed = await monitorTeam(name, cwd);
+        if (!refreshed) break;
+        snapshot = refreshed;
+        if (!isPromptStartupTransientSnapshot(config, snapshot)) break;
+      }
+    }
+    if (snapshot && isPromptStartupStalled(config, snapshot)) {
+      snapshot = synthesizePromptStartupStallSnapshot(snapshot);
+    }
     const immediateEvent = await readTeamEvents(name, cwd, {
       afterEventId: baselineCursor || undefined,
       wakeableOnly: true,

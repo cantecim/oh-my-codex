@@ -1847,6 +1847,19 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
   const workerScanMs = performance.now() - workerScanStartMs;
 
   for (const { worker: w, alive, status, heartbeat } of workerSignals) {
+    let stableAlive = alive;
+    if (
+      config.worker_launch_mode === 'prompt'
+      && stableAlive
+      && status.state === 'unknown'
+      && !heartbeat
+      && typeof w.pid === 'number'
+      && Number.isInteger(w.pid)
+      && w.pid > 0
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      stableAlive = isPromptWorkerAlive(config, w);
+    }
     const currentTask = status.current_task_id ? taskById.get(status.current_task_id) ?? null : null;
     const previousTurns = previousSnapshot ? (previousSnapshot.workerTurnCountByName[w.name] ?? 0) : null;
     const previousTaskId = previousSnapshot?.workerTaskIdByName[w.name] ?? '';
@@ -1864,14 +1877,14 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
 
     workers.push({
       name: w.name,
-      alive,
+      alive: stableAlive,
       status,
       heartbeat,
       assignedTasks: w.assigned_tasks,
       turnsWithoutProgress,
     });
 
-    if (!alive) {
+    if (!stableAlive) {
       deadWorkers.push(w.name);
       // Find in-progress tasks owned by this dead worker
       const deadWorkerTasks = inProgressByOwner.get(w.name) || [];
@@ -1880,7 +1893,7 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
       }
     }
 
-    if (alive && turnsWithoutProgress > 5) {
+    if (stableAlive && turnsWithoutProgress > 5) {
       nonReportingWorkers.push(w.name);
       recommendations.push(`Send reminder to non-reporting ${w.name}`);
     }
