@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, rmSync } from 'node:fs';
-import { arch, platform } from 'node:os';
+import { readFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { arch, platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -20,7 +20,7 @@ type NpmPackDryRunResult = {
   files?: NpmPackDryRunFile[];
 };
 
-describe.skip('package bin contract', () => {
+describe('package bin contract (portable)', () => {
   it('declares omx with an explicit relative bin path and avoids packaging platform-specific native binaries', () => {
     const packageJsonPath = join(process.cwd(), 'package.json');
     const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as PackageJson;
@@ -48,15 +48,19 @@ describe.skip('package bin contract', () => {
     assert.ok(pkg.files?.includes('crates/'));
 
     const binPath = join(process.cwd(), 'dist', 'cli', 'omx.js');
-
     const binSource = readFileSync(binPath, 'utf-8');
     assert.match(binSource, /^#!\/usr\/bin\/env node/);
 
     rmSync(packagedSparkShellPath, { force: true });
 
+    const npmCache = mkdtempSync(join(tmpdir(), 'omx-npm-cache-'));
     const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
       cwd: process.cwd(),
       encoding: 'utf-8',
+      env: {
+        ...process.env,
+        npm_config_cache: npmCache,
+      },
     });
 
     assert.equal(packed.status, 0, packed.stderr || packed.stdout);

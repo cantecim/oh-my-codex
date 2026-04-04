@@ -546,12 +546,20 @@ async function isManagedOmxSessionForAutoNudge(cwd, payload) {
     if (safeString(sessionState.session_id).trim() !== invocationSessionId) return false;
     if (isSessionStale(sessionState)) return false;
 
-    // Fallback watcher can synthesize notify-hook payloads without an active
-    // mode state. If the current cwd has a live OMX session file that matches
-    // the invocation session id and we are already inside tmux, treat it as a
-    // managed OMX session even when the watcher is not a descendant of the
-    // original session owner process.
-    if (safeString(process.env.TMUX_PANE || '').trim() !== '') return true;
+    if (Number.isInteger(sessionState.pid) && sessionState.pid > 1 && sessionState.pid === process.ppid) {
+      return true;
+    }
+
+    // Only the fallback watcher may treat a matching live session file plus
+    // current tmux pane as sufficient managed-session evidence without PID
+    // ancestry. Direct notify-hook runs should still require the stricter
+    // managed-session checks so plain tmux Codex sessions are not upgraded.
+    if (
+      safeString(payload?.source).trim() === 'notify-fallback-watcher-stall'
+      && safeString(process.env.TMUX_PANE || '').trim() !== ''
+    ) {
+      return true;
+    }
 
     const currentTmuxSession = readCurrentTmuxSessionName();
     if (currentTmuxSession) {
@@ -566,16 +574,12 @@ async function isManagedOmxSessionForAutoNudge(cwd, payload) {
 }
 
 export async function resolveNudgePaneTarget(stateDir: any, cwd = '') {
-  // Use canonical codex pane resolver — validates pane is running an agent, not a shell
-  const { resolveCodexPane } = await import('../tmux-hook-engine.js');
-  const codexPane = resolveCodexPane();
-  if (codexPane) return codexPane;
-
   let fallbackPane = '';
 
   try {
     const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
-    for (const dir of scopedDirs) {
+    const dirsToScan = [...new Set([...scopedDirs, stateDir])];
+    for (const dir of dirsToScan) {
       const files = await readdir(dir).catch(() => []);
       for (const f of files) {
         if (!f.endsWith('-state.json')) continue;
@@ -599,6 +603,11 @@ export async function resolveNudgePaneTarget(stateDir: any, cwd = '') {
   }
 
   if (fallbackPane) return fallbackPane;
+
+  // Use canonical codex pane resolver only after honoring active-mode anchors.
+  const { resolveCodexPane } = await import('../tmux-hook-engine.js');
+  const codexPane = resolveCodexPane();
+  if (codexPane) return codexPane;
 
   return resolveCodexPaneByCwdFallback(cwd);
 }

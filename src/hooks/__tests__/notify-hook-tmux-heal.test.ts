@@ -120,7 +120,7 @@ exit 1
     });
   });
 
-  it('falls back to current tmux pane and heals stale session target', async () => {
+  it.skip('falls back to current tmux pane and heals stale session target', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -249,7 +249,7 @@ exit 1
     });
   });
 
-  it('skips injection when fallback pane cwd does not match hook cwd', async () => {
+  it.skip('skips injection when fallback pane cwd does not match hook cwd', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -489,7 +489,7 @@ exit 1
     });
   });
 
-  it('heals a stale HUD pane target back to the canonical codex pane', async () => {
+  it.skip('heals a stale HUD pane target back to the canonical codex pane', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -599,6 +599,361 @@ exit 1
       const hookState = await readJson<Record<string, unknown>>(hookStatePath);
       assert.equal(hookState.last_reason, 'injection_sent');
       assert.equal(hookState.last_target, '%99');
+
+      const healedConfig = await readJson<{ target: { type: string; value: string } }>(configPath);
+      assert.equal(healedConfig.target.type, 'pane');
+      assert.equal(healedConfig.target.value, '%99');
+    });
+  });
+
+  it('falls back to current tmux pane and heals stale session target (isolated env)', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const sessionId = 'omx-abc123';
+      const sessionStateDir = join(stateDir, 'sessions', sessionId);
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const configPath = join(omxDir, 'tmux-hook.json');
+      const hookStatePath = join(stateDir, 'tmux-hook-state.json');
+
+      await mkdir(sessionStateDir, { recursive: true });
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
+      await writeJson(configPath, {
+        enabled: true,
+        target: { type: 'session', value: sessionId },
+        allowed_modes: ['ralph'],
+        cooldown_ms: 0,
+        max_injections_per_session: 10,
+        prompt_template: 'Continue [OMX_TMUX_INJECT]',
+        marker: '[OMX_TMUX_INJECT]',
+        dry_run: false,
+        log_level: 'debug',
+      });
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "devsess" ]]; then
+    echo "%42 1"
+    exit 0
+  fi
+  echo "can't find session: $target" >&2
+  exit 1
+fi
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
+    echo "%42"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
+    echo "${cwd}"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  echo "bad display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      const payload = {
+        cwd,
+        type: 'agent-turn-complete',
+        'thread-id': 'thread-test',
+        'turn-id': 'turn-test',
+        'input-messages': ['no marker here'],
+        'last-assistant-message': 'output',
+      };
+
+      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+          OMX_TEAM_WORKER: '',
+          TMUX_PANE: '%42',
+        },
+      });
+      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+
+      const hookState = await readJson<Record<string, unknown>>(hookStatePath);
+      assert.equal(hookState.last_reason, 'injection_sent');
+      assert.equal(hookState.total_injections, 1);
+
+      const healedConfig = await readJson<{ target: { type: string; value: string } }>(configPath);
+      assert.equal(healedConfig.target.type, 'pane');
+      assert.equal(healedConfig.target.value, '%42');
+    });
+  });
+
+  it('skips injection when fallback pane cwd does not match hook cwd (isolated env)', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const sessionId = 'omx-abc123';
+      const sessionStateDir = join(stateDir, 'sessions', sessionId);
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const configPath = join(omxDir, 'tmux-hook.json');
+      const hookStatePath = join(stateDir, 'tmux-hook-state.json');
+
+      await mkdir(sessionStateDir, { recursive: true });
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
+      await writeJson(configPath, {
+        enabled: true,
+        target: { type: 'session', value: sessionId },
+        allowed_modes: ['ralph'],
+        cooldown_ms: 0,
+        max_injections_per_session: 10,
+        prompt_template: 'Continue [OMX_TMUX_INJECT]',
+        marker: '[OMX_TMUX_INJECT]',
+        dry_run: false,
+        log_level: 'debug',
+      });
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "devsess" ]]; then
+    echo "%42 1"
+    exit 0
+  fi
+  echo "can't find session: $target" >&2
+  exit 1
+fi
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
+    echo "%42"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
+    echo "/tmp/not-the-hook-cwd"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  echo "bad display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      const payload = {
+        cwd,
+        type: 'agent-turn-complete',
+        'thread-id': 'thread-test-2',
+        'turn-id': 'turn-test-2',
+        'input-messages': ['no marker here'],
+        'last-assistant-message': 'output',
+      };
+
+      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+          OMX_TEAM_WORKER: '',
+          TMUX_PANE: '%42',
+        },
+      });
+      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+
+      const hookState = await readJson<Record<string, unknown>>(hookStatePath);
+      assert.equal(hookState.last_reason, 'pane_cwd_mismatch');
+      assert.equal(hookState.total_injections ?? 0, 0);
+    });
+  });
+
+  it('heals a stale HUD pane target back to the canonical codex pane (isolated env)', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const sessionId = 'omx-hud-stale';
+      const sessionStateDir = join(stateDir, 'sessions', sessionId);
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const configPath = join(omxDir, 'tmux-hook.json');
+      const hookStatePath = join(stateDir, 'tmux-hook-state.json');
+
+      await mkdir(sessionStateDir, { recursive: true });
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
+      await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
+      await writeJson(configPath, {
+        enabled: true,
+        target: { type: 'pane', value: '%77' },
+        allowed_modes: ['ralph'],
+        cooldown_ms: 0,
+        max_injections_per_session: 10,
+        prompt_template: 'Continue [OMX_TMUX_INJECT]',
+        marker: '[OMX_TMUX_INJECT]',
+        dry_run: false,
+        log_level: 'debug',
+      });
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
+    echo "node"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_id}" && "$target" == "%77" ]]; then
+    echo "%77"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%77" ]]; then
+    echo "node dist/cli/omx.js hud --watch"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%77" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
+    echo "${cwd}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%99" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%99" ]]; then
+    echo "0"
+    exit 0
+  fi
+  exit 1
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      const payload = {
+        cwd,
+        type: 'agent-turn-complete',
+        session_id: sessionId,
+        'thread-id': 'thread-test-hud-heal',
+        'turn-id': 'turn-test-hud-heal',
+        'input-messages': ['no marker here'],
+        'last-assistant-message': 'output',
+      };
+
+      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+          OMX_TEAM_WORKER: '',
+          TMUX_PANE: '%99',
+        },
+      });
+      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+
+      const hookState = await readJson<Record<string, unknown>>(hookStatePath);
+      assert.equal(hookState.last_reason, 'injection_sent');
+      assert.equal(hookState.total_injections, 1);
 
       const healedConfig = await readJson<{ target: { type: string; value: string } }>(configPath);
       assert.equal(healedConfig.target.type, 'pane');

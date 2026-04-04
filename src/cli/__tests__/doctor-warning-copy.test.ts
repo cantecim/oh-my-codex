@@ -69,7 +69,7 @@ command = "node"
   it('warns when explore harness sources are packaged but cargo is unavailable', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-explore-copy-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('doctor-warning-copy', async () => {
         const home = join(wd, 'home');
         const codexDir = join(home, '.codex');
         const fakeBin = join(wd, 'bin');
@@ -96,7 +96,7 @@ command = "node"
   });
 
   it('passes explore harness check when a packaged native binary is present even without cargo', async () => {
-    await withPackagedExploreHarnessLock(async () => {
+    await withPackagedExploreHarnessLock('doctor-warning-copy', async () => {
       const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-explore-binary-'));
       try {
         const home = join(wd, 'home');

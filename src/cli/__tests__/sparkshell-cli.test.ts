@@ -136,7 +136,7 @@ describe('resolveSparkShellBinaryPath', () => {
     );
   });
 
-  it('hydrates a native binary when packaged and repo-local binaries are absent', async () => {
+  it.skip('hydrates a native binary when packaged and repo-local binaries are absent', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-sparkshell-hydrated-'));
     try {
       const assetRoot = join(wd, 'assets');
@@ -221,7 +221,7 @@ describe('resolveSparkShellBinaryPath', () => {
     }
   });
 
-  it('falls back cleanly when hydration manifest is unavailable', async () => {
+  it.skip('falls back cleanly when hydration manifest is unavailable', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-sparkshell-hydration-missing-'));
     try {
       const missingRoot = join(wd, 'missing-assets');
@@ -263,6 +263,87 @@ describe('resolveSparkShellBinaryPath', () => {
       } finally {
         await server.close();
       }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates a native binary when packaged and repo-local binaries are absent (platform-agnostic)', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-sparkshell-hydrated-'));
+    try {
+      const cacheDir = join(wd, 'cache');
+      const stagingDir = join(wd, 'staging');
+      await mkdir(stagingDir, { recursive: true });
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+      const stagedBinary = join(stagingDir, process.platform === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell');
+      await writeFile(stagedBinary, process.platform === 'win32' ? '@echo off\r\necho hydrated\r\n' : '#!/bin/sh\necho hydrated\n');
+      if (process.platform !== 'win32') await chmod(stagedBinary, 0o755);
+
+      const archiveName = process.platform === 'win32'
+        ? 'omx-sparkshell-x86_64-pc-windows-msvc.zip'
+        : 'omx-sparkshell-x86_64-unknown-linux-musl.tar.gz';
+      const archivePath = join(wd, archiveName);
+      const buildArchive = process.platform === 'win32'
+        ? spawnSync('powershell', ['-NoLogo', '-NoProfile', '-Command', `Compress-Archive -Path '${stagedBinary.replace(/'/g, "''")}' -DestinationPath '${archivePath.replace(/'/g, "''")}' -Force`], { encoding: 'utf-8' })
+        : spawnSync('tar', ['-czf', archivePath, '-C', stagingDir, 'omx-sparkshell'], { encoding: 'utf-8' });
+      assert.equal(buildArchive.status, 0, buildArchive.stderr || buildArchive.stdout);
+      const archiveBuffer = await readFile(archivePath);
+      const checksum = createHash('sha256').update(archiveBuffer).digest('hex');
+
+      const resolved = await resolveSparkShellBinaryPathWithHydration({
+        packageRoot: wd,
+        platform: process.platform === 'win32' ? 'win32' : 'linux',
+        arch: 'x64',
+        env: {
+          OMX_NATIVE_MANIFEST_URL: `data:application/json,${encodeURIComponent(JSON.stringify({
+            version: '0.8.15',
+            assets: [{
+              product: 'omx-sparkshell',
+              version: '0.8.15',
+              platform: process.platform === 'win32' ? 'win32' : 'linux',
+              arch: 'x64',
+              archive: archiveName,
+              binary: process.platform === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell',
+              binary_path: process.platform === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell',
+              sha256: checksum,
+              size: archiveBuffer.length,
+              download_url: `data:application/octet-stream;base64,${archiveBuffer.toString('base64')}`,
+            }],
+          }))}`,
+          OMX_NATIVE_CACHE_DIR: cacheDir,
+        },
+        exists: () => false,
+      });
+      assert.match(resolved, /cache/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back cleanly when hydration manifest is unavailable (platform-agnostic)', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-sparkshell-hydration-missing-'));
+    try {
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+
+      await assert.rejects(
+        () => resolveSparkShellBinaryPathWithHydration({
+          packageRoot: wd,
+          platform: process.platform === 'win32' ? 'win32' : 'linux',
+          arch: 'x64',
+          env: {
+            OMX_NATIVE_MANIFEST_URL: 'data:application/json,%7B%22version%22%3A%220.8.15%22%2C%22assets%22%3A%5B%5D%7D',
+            OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
+          },
+          exists: () => false,
+        }),
+        /native binary not found/,
+      );
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

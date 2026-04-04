@@ -314,7 +314,7 @@ describe('resolveExploreHarnessCommand', () => {
   });
 
   it('prefers a packaged native harness binary when present', async () => {
-    await withPackagedExploreHarnessLock(async () => {
+    await withPackagedExploreHarnessLock('explore-packaged', async () => {
       const wd = await mkdtemp(join(tmpdir(), 'omx-explore-native-'));
       try {
         const binDir = join(wd, 'bin');
@@ -375,7 +375,7 @@ describe('resolveExploreHarnessCommand', () => {
     }
   });
 
-  it('hydrates a native harness for packaged installs before attempting cargo fallback', async () => {
+  it.skip('hydrates a native harness for packaged installs before attempting cargo fallback', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-hydrated-'));
     try {
       const assetRoot = join(wd, 'assets');
@@ -387,8 +387,6 @@ describe('resolveExploreHarnessCommand', () => {
         version: '0.8.15',
         repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
       }));
-      await mkdir(join(wd, 'crates', 'omx-explore'), { recursive: true });
-      await writeFile(join(wd, 'crates', 'omx-explore', 'Cargo.toml'), '[package]\nname=\"omx-explore-harness\"\nversion=\"0.8.15\"\n');
       const binaryPath = join(stagingDir, packagedExploreHarnessBinaryName());
       await writeFile(binaryPath, '#!/bin/sh\necho hydrated-explore\n');
       await chmod(binaryPath, 0o755);
@@ -452,7 +450,7 @@ describe('resolveExploreHarnessCommand', () => {
     }
   });
 
-  it('reports a clean fallback error when the native manifest is unavailable for packaged installs', async () => {
+  it.skip('reports a clean fallback error when the native manifest is unavailable for packaged installs', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-missing-manifest-'));
     try {
       await writeFile(join(wd, 'package.json'), JSON.stringify({
@@ -485,6 +483,75 @@ describe('resolveExploreHarnessCommand', () => {
       } finally {
         await server.close();
       }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates a native harness for packaged installs before attempting cargo fallback (platform-agnostic)', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-hydrated-'));
+    try {
+      const cacheDir = join(wd, 'cache');
+      const stagingDir = join(wd, 'staging');
+      await mkdir(stagingDir, { recursive: true });
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+      await mkdir(join(wd, 'crates', 'omx-explore'), { recursive: true });
+      await writeFile(join(wd, 'crates', 'omx-explore', 'Cargo.toml'), '[package]\nname=\"omx-explore-harness\"\nversion=\"0.8.15\"\n');
+      const binaryPath = join(stagingDir, packagedExploreHarnessBinaryName());
+      await writeFile(binaryPath, '#!/bin/sh\necho hydrated-explore\n');
+      await chmod(binaryPath, 0o755);
+
+      const archivePath = join(wd, 'omx-explore-harness-x86_64-unknown-linux-musl.tar.gz');
+      const archive = spawnSync('tar', ['-czf', archivePath, '-C', stagingDir, packagedExploreHarnessBinaryName()], { encoding: 'utf-8' });
+      assert.equal(archive.status, 0, archive.stderr || archive.stdout);
+      const archiveBuffer = await readFile(archivePath);
+      const checksum = createHash('sha256').update(archiveBuffer).digest('hex');
+      const archiveDataUrl = `data:application/gzip;base64,${archiveBuffer.toString('base64')}`;
+      const manifest = {
+        version: '0.8.15',
+        assets: [{
+          product: 'omx-explore-harness',
+          version: '0.8.15',
+          platform: process.platform,
+          arch: process.arch,
+          archive: 'omx-explore-harness-x86_64-unknown-linux-musl.tar.gz',
+          binary: 'omx-explore-harness',
+          binary_path: 'omx-explore-harness',
+          sha256: checksum,
+          size: archiveBuffer.length,
+          download_url: archiveDataUrl,
+        }],
+      };
+
+      const resolved = await resolveExploreHarnessCommandWithHydration(wd, {
+        OMX_NATIVE_MANIFEST_URL: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`,
+        OMX_NATIVE_CACHE_DIR: cacheDir,
+      } as NodeJS.ProcessEnv);
+      assert.notEqual(resolved.command, 'cargo');
+      assert.match(resolved.command, /cache/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a clean fallback error when the native manifest is unavailable for packaged installs (platform-agnostic)', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-missing-manifest-'));
+    try {
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+
+      await assert.rejects(
+        () => resolveExploreHarnessCommandWithHydration(wd, {
+          OMX_NATIVE_MANIFEST_URL: 'data:application/json,%7B%22version%22%3A%220.8.15%22%2C%22assets%22%3A%5B%5D%7D',
+          OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
+        } as NodeJS.ProcessEnv),
+        /no compatible native harness is available/,
+      );
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -696,7 +763,7 @@ describe('exploreCommand', () => {
   it('launches an env-node codex binary while keeping model shell commands allowlisted', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-harness-e2e-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('explore-packaged', async () => {
         const capturePath = join(wd, 'capture.json');
         const codexStub = await writeEnvNodeCodexStub(wd, capturePath);
         const testPath = await createExploreTestPath(wd);
@@ -726,7 +793,7 @@ describe('exploreCommand', () => {
   it('supports --prompt-file end-to-end with the harness', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-harness-prompt-file-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('explore-packaged', async () => {
         const capturePath = join(wd, 'capture.json');
         const codexStub = await writeEnvNodeCodexStub(wd, capturePath);
         const testPath = await createExploreTestPath(wd);
@@ -752,7 +819,7 @@ describe('exploreCommand', () => {
   it('preserves must-preserve facts in a long noisy summary fixture', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-fidelity-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('explore-packaged', async () => {
         const harnessStub = await writeExploreHarnessScenarioStub(
           wd,
           `
@@ -783,7 +850,7 @@ exit 0
   it('preserves buried critical facts in adversarial noisy output', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-adversarial-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('explore-packaged', async () => {
         const harnessStub = await writeExploreHarnessScenarioStub(
           wd,
           `
@@ -822,7 +889,7 @@ exit 0
   it('falls back after spark failure and preserves actionable stderr guidance', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-fallback-success-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('explore-packaged', async () => {
         const harnessStub = await writeExploreHarnessScenarioStub(
           wd,
           `
@@ -851,7 +918,7 @@ printf '%s\n' '# Answer' '- recovered with fallback model' '- MUST: actionable r
   it('reports both failed attempts with codes and final actionable stderr end-to-end', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-fallback-failure-'));
     try {
-      await withPackagedExploreHarnessHidden(async () => {
+      await withPackagedExploreHarnessHidden('explore-packaged', async () => {
         const harnessStub = await writeExploreHarnessScenarioStub(
           wd,
           `

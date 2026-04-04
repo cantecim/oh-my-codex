@@ -311,19 +311,29 @@ export async function resolveExploreHarnessCommandWithHydration(
     }
   }
 
+  if (isRepositoryCheckout(packageRoot)) {
+    const manifestPath = join(packageRoot, 'crates', 'omx-explore', 'Cargo.toml');
+    if (existsSync(manifestPath)) {
+      return {
+        command: 'cargo',
+        args: ['run', '--quiet', '--manifest-path', manifestPath, '--'],
+      };
+    }
+
+    const repoBuilt = repoBuiltExploreHarnessCommand(packageRoot);
+    if (repoBuilt) return repoBuilt;
+
+    return resolveExploreHarnessCommand(packageRoot, env);
+  }
+
   const packaged = resolvePackagedExploreHarnessCommand(packageRoot);
   if (packaged) return packaged;
 
   const repoBuilt = repoBuiltExploreHarnessCommand(packageRoot);
   if (repoBuilt) return repoBuilt;
-
-  if (!isRepositoryCheckout(packageRoot)) {
-    const hydrated = await hydrateNativeBinary('omx-explore-harness', { packageRoot, env });
-    if (hydrated) return { command: hydrated, args: [] };
-    throw new Error('[explore] no compatible native harness is available for this install. Reconnect to the network so OMX can fetch the release asset, or set OMX_EXPLORE_BIN to a prebuilt harness binary.');
-  }
-
-  return resolveExploreHarnessCommand(packageRoot, env);
+  const hydrated = await hydrateNativeBinary('omx-explore-harness', { packageRoot, env });
+  if (hydrated) return { command: hydrated, args: [] };
+  throw new Error('[explore] no compatible native harness is available for this install. Reconnect to the network so OMX can fetch the release asset, or set OMX_EXPLORE_BIN to a prebuilt harness binary.');
 }
 
 export function buildExploreHarnessArgs(

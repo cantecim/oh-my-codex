@@ -290,7 +290,7 @@ describe('notify-hook team leader nudge', () => {
     });
   });
 
-  it('sends immediate all-workers-idle nudge for active team (leader context)', async () => {
+  it.skip('sends immediate all-workers-idle nudge for active team (leader context)', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -427,7 +427,143 @@ describe('notify-hook team leader nudge', () => {
     });
   });
 
-  it('suggests reusing the team when follow-up tasks are pending and worker panes are still reusable', async () => {
+  it.skip('suggests reusing the team when follow-up tasks are pending and worker panes are still reusable', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const teamName = 'idle-followup-reuse';
+      const teamDir = join(stateDir, 'team', teamName);
+      const workersDir = join(teamDir, 'workers');
+      const tasksDir = join(teamDir, 'tasks');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+      const nowIso = new Date().toISOString();
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(workersDir, { recursive: true });
+      await mkdir(tasksDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(stateDir, 'team-state.json'), {
+        active: true,
+        team_name: teamName,
+        current_phase: 'team-exec',
+      });
+      await writeJson(join(teamDir, 'config.json'), {
+        name: teamName,
+        tmux_session: 'idle-followup-reuse:0',
+        leader_pane_id: '%97',
+        workers: [
+          { name: 'worker-1', index: 1, pane_id: '%10', role: 'executor' },
+          { name: 'worker-2', index: 2, pane_id: '%11', role: 'executor' },
+        ],
+      });
+      await writeJson(join(stateDir, 'hud-state.json'), {
+        last_turn_at: nowIso,
+        turn_count: 1,
+      });
+      await writeJson(join(tasksDir, 'task-2.json'), {
+        id: '2',
+        subject: 'Follow-up',
+        description: 'queued follow-up task',
+        status: 'pending',
+        created_at: nowIso,
+      });
+      for (const worker of ['worker-1', 'worker-2']) {
+        await mkdir(join(workersDir, worker), { recursive: true });
+        await writeJson(join(workersDir, worker, 'status.json'), {
+          state: 'idle',
+          updated_at: nowIso,
+        });
+      }
+
+      await writeFile(fakeTmuxPath, buildFakeTmuxWithListPanes(tmuxLogPath, ['%10 12345', '%11 12346']));
+      await chmod(fakeTmuxPath, 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir);
+      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /\[OMX\] All 2 workers idle/);
+      assert.match(tmuxLog, /Next: assign the next follow-up task to this idle team/);
+      assert.doesNotMatch(tmuxLog, /launch a new team/);
+      assert.doesNotMatch(tmuxLog, /omx team shutdown/);
+    });
+  });
+
+  it('sends immediate all-workers-idle nudge for active team (leader context) (isolated env)', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const teamName = 'idle-alpha';
+      const teamDir = join(stateDir, 'team', teamName);
+      const workersDir = join(teamDir, 'workers');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(workersDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(stateDir, 'team-state.json'), {
+        active: true,
+        team_name: teamName,
+        current_phase: 'team-exec',
+      });
+      await writeJson(join(teamDir, 'config.json'), {
+        name: teamName,
+        tmux_session: 'idle-sess:0',
+        leader_pane_id: '%99',
+        workers: [
+          { name: 'worker-1', index: 1, role: 'executor', assigned_tasks: [] },
+          { name: 'worker-2', index: 2, role: 'executor', assigned_tasks: [] },
+        ],
+      });
+      await writeJson(join(stateDir, 'hud-state.json'), {
+        last_turn_at: new Date().toISOString(),
+        turn_count: 1,
+      });
+      await mkdir(join(workersDir, 'worker-1'), { recursive: true });
+      await writeJson(join(workersDir, 'worker-1', 'status.json'), {
+        state: 'idle',
+        updated_at: new Date().toISOString(),
+      });
+      await mkdir(join(workersDir, 'worker-2'), { recursive: true });
+      await writeJson(join(workersDir, 'worker-2', 'status.json'), {
+        state: 'idle',
+        updated_at: new Date().toISOString(),
+      });
+
+      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await chmod(fakeTmuxPath, 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir);
+      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /send-keys/);
+      assert.match(tmuxLog, /-t %99/, 'should target leader pane when present');
+      assert.match(tmuxLog, /\[OMX\] All 2 workers idle/, 'should emit all-workers-idle nudge');
+      assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/, 'should include injection marker');
+      const submitMatches = tmuxLog.match(/send-keys -t %99 C-m/g) || [];
+      assert.equal(submitMatches.length, 2, 'leader nudge should submit with isolated double C-m');
+      assert.ok(!/send-keys[^\n]*-l[^\n]*C-m/.test(tmuxLog), 'must not mix literal payload with submit keypresses');
+
+      const eventsPath = join(teamDir, 'events', 'events.ndjson');
+      assert.ok(existsSync(eventsPath), 'events.ndjson should exist');
+      const eventsContent = await readFile(eventsPath, 'utf-8');
+      const events = eventsContent.trim().split('\n').map(line => JSON.parse(line));
+      const nudgeEvent = events.find((e: { type: string }) => e.type === 'team_leader_nudge');
+      assert.ok(nudgeEvent, 'should have team_leader_nudge event');
+      assert.equal(nudgeEvent.reason, 'done_waiting_on_leader');
+    });
+  });
+
+  it('suggests reusing the team when follow-up tasks are pending and worker panes are still reusable (isolated env)', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
