@@ -1,4 +1,3 @@
-import { createServer } from 'node:http';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -16,30 +15,12 @@ import {
   resolveNativeReleaseBaseUrl,
 } from '../native-assets.js';
 
-async function startStaticServer(root: string): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    const filePath = join(root, url.pathname.replace(/^\//, ''));
-    try {
-      const body = await readFile(filePath);
-      res.writeHead(200);
-      res.end(body);
-    } catch {
-      res.writeHead(404);
-      res.end('missing');
-    }
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('failed to bind test server');
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
-  };
-}
-
 function sha256(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
+}
+
+function toDataUrl(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
 describe('native asset helpers', () => {
@@ -171,28 +152,21 @@ describe('native asset helpers', () => {
         ],
       };
 
-      const server = await startStaticServer(assetRoot);
-      try {
-        manifest.assets[0].download_url = `${server.baseUrl}/${manifest.assets[0].archive}`;
-        await writeFile(join(assetRoot, 'native-release-manifest.json'), JSON.stringify(manifest, null, 2));
-
-        const hydrated = await hydrateNativeBinary('omx-sparkshell', {
-          packageRoot: wd,
-          env: {
-            OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
-            OMX_NATIVE_CACHE_DIR: cacheDir,
-          },
-          platform: 'linux',
-          arch: 'x64',
-        });
-
-        assert.equal(hydrated, resolveCachedNativeBinaryPath('omx-sparkshell', '0.8.15', 'linux', 'x64', {
+      manifest.assets[0].download_url = toDataUrl(archiveBuffer, 'application/gzip');
+      const hydrated = await hydrateNativeBinary('omx-sparkshell', {
+        packageRoot: wd,
+        env: {
+          OMX_NATIVE_MANIFEST_URL: toDataUrl(Buffer.from(JSON.stringify(manifest, null, 2)), 'application/json'),
           OMX_NATIVE_CACHE_DIR: cacheDir,
-        }, 'musl'));
-        assert.equal(await readFile(hydrated!, 'utf-8'), '#!/bin/sh\necho hydrated\n');
-      } finally {
-        await server.close();
-      }
+        },
+        platform: 'linux',
+        arch: 'x64',
+      });
+
+      assert.equal(hydrated, resolveCachedNativeBinaryPath('omx-sparkshell', '0.8.15', 'linux', 'x64', {
+        OMX_NATIVE_CACHE_DIR: cacheDir,
+      }, 'musl'));
+      assert.equal(await readFile(hydrated!, 'utf-8'), '#!/bin/sh\necho hydrated\n');
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -239,28 +213,21 @@ describe('native asset helpers', () => {
         ],
       };
 
-      const server = await startStaticServer(assetRoot);
-      try {
-        manifest.assets[0].download_url = `${server.baseUrl}/${manifest.assets[0].archive}`;
-        await writeFile(join(assetRoot, 'native-release-manifest.json'), JSON.stringify(manifest, null, 2));
-
-        const hydrated = await hydrateNativeBinary('omx-sparkshell', {
-          packageRoot: wd,
-          env: {
-            OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
-            OMX_NATIVE_CACHE_DIR: cacheDir,
-          },
-          platform: 'linux',
-          arch: 'x64',
-        });
-
-        assert.equal(hydrated, resolveCachedNativeBinaryPath('omx-sparkshell', '0.8.15', 'linux', 'x64', {
+      manifest.assets[0].download_url = toDataUrl(archiveBuffer, 'application/gzip');
+      const hydrated = await hydrateNativeBinary('omx-sparkshell', {
+        packageRoot: wd,
+        env: {
+          OMX_NATIVE_MANIFEST_URL: toDataUrl(Buffer.from(JSON.stringify(manifest, null, 2)), 'application/json'),
           OMX_NATIVE_CACHE_DIR: cacheDir,
-        }, 'musl'));
-        assert.equal(await readFile(hydrated!, 'utf-8'), '#!/bin/sh\necho hydrated-nested\n');
-      } finally {
-        await server.close();
-      }
+        },
+        platform: 'linux',
+        arch: 'x64',
+      });
+
+      assert.equal(hydrated, resolveCachedNativeBinaryPath('omx-sparkshell', '0.8.15', 'linux', 'x64', {
+        OMX_NATIVE_CACHE_DIR: cacheDir,
+      }, 'musl'));
+      assert.equal(await readFile(hydrated!, 'utf-8'), '#!/bin/sh\necho hydrated-nested\n');
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -274,23 +241,16 @@ describe('native asset helpers', () => {
         repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
       }));
 
-      const missingRoot = join(wd, 'missing-assets');
-      await mkdir(missingRoot, { recursive: true });
-      const server = await startStaticServer(missingRoot);
-      try {
-        const hydrated = await hydrateNativeBinary('omx-sparkshell', {
-          packageRoot: wd,
-          env: {
-            OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
-            OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
-          },
-          platform: 'linux',
-          arch: 'x64',
-        });
-        assert.equal(hydrated, undefined);
-      } finally {
-        await server.close();
-      }
+      const hydrated = await hydrateNativeBinary('omx-sparkshell', {
+        packageRoot: wd,
+        env: {
+          OMX_NATIVE_MANIFEST_URL: 'data:application/json;base64,e30=',
+          OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
+        },
+        platform: 'linux',
+        arch: 'x64',
+      });
+      assert.equal(hydrated, undefined);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

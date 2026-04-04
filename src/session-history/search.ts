@@ -1,4 +1,4 @@
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, realpathSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -250,8 +250,24 @@ function buildSnippet(text: string, query: string, context: number, caseSensitiv
 function matchesFilter(value: string | null, filter: string | undefined, caseSensitive: boolean): boolean {
   if (!filter) return true;
   if (!value) return false;
+  const normalizedValue = caseSensitive ? value : value.toLowerCase();
+  const normalizedFilter = caseSensitive ? filter : filter.toLowerCase();
+  if (normalizedValue.includes(normalizedFilter)) return true;
+
+  if (value.startsWith('/') && filter.startsWith('/')) {
+    try {
+      const resolvedValue = realpathSync.native(value);
+      const resolvedFilter = realpathSync.native(filter);
+      const normalizedResolvedValue = caseSensitive ? resolvedValue : resolvedValue.toLowerCase();
+      const normalizedResolvedFilter = caseSensitive ? resolvedFilter : resolvedFilter.toLowerCase();
+      return normalizedResolvedValue.includes(normalizedResolvedFilter);
+    } catch {
+      // Fall through to the plain lexical comparison result below.
+    }
+  }
+
   if (caseSensitive) return value.includes(filter);
-  return value.toLowerCase().includes(filter.toLowerCase());
+  return false;
 }
 
 async function searchRolloutFile(

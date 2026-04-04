@@ -207,7 +207,8 @@ export function resolveNativeReleaseAssetCandidates(
   arch: string,
   options: NativeBinaryCandidateOptions = {},
 ): NativeReleaseAsset[] {
-  const candidates = manifest.assets.filter((asset) => asset.product === product
+  const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+  const candidates = assets.filter((asset) => asset.product === product
     && asset.version === version
     && asset.platform === platform
     && asset.arch === arch);
