@@ -32,7 +32,57 @@ const RETRY_PATTERNS = [
   /\btry again\b/i,
 ];
 
-function gitValue(cwd: any, args: string[]): string {
+type JsonObject = Record<string, unknown>;
+
+interface RepositoryMetadata {
+  repo_path: string;
+  repo_name: string;
+  worktree_path: string;
+  branch?: string;
+}
+
+interface PrInfo {
+  pr_number?: number;
+  pr_url?: string;
+}
+
+interface ExecCommandClassification {
+  kind: 'pr-create' | 'test';
+  command: string;
+}
+
+interface CommandResult extends PrInfo, Record<string, unknown> {
+  exit_code?: number;
+  success?: boolean;
+  error_summary?: string;
+}
+
+interface OperationalContextInput {
+  cwd: string;
+  normalizedEvent: string;
+  sessionId?: string;
+  sessionName?: string;
+  text?: string;
+  output?: string;
+  command?: string;
+  toolName?: string;
+  status?: string;
+  issueNumber?: number;
+  prNumber?: number;
+  prUrl?: string;
+  errorSummary?: string;
+  extra?: Record<string, unknown>;
+}
+
+interface AssistantSignalEvent {
+  event: 'handoff-needed' | 'retry-needed';
+  normalized_event: 'handoff-needed' | 'retry-needed';
+  parser_reason: 'assistant_message_handoff' | 'assistant_message_retry';
+  confidence: number;
+  error_summary?: string;
+}
+
+function gitValue(cwd: string, args: string[]): string {
   try {
     return execFileSync('git', args, {
       cwd,
@@ -46,14 +96,14 @@ function gitValue(cwd: any, args: string[]): string {
   }
 }
 
-function shellSegments(command: any): string[] {
+function shellSegments(command: unknown): string[] {
   return safeString(command)
     .split(/(?:&&|\|\||;|\n)/)
     .map((segment) => segment.trim())
     .filter(Boolean);
 }
 
-function sanitizeTmuxToken(value: any): string {
+function sanitizeTmuxToken(value: unknown): string {
   const cleaned = safeString(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -61,7 +111,7 @@ function sanitizeTmuxToken(value: any): string {
   return cleaned || 'unknown';
 }
 
-function buildTmuxSessionName(cwd: any, sessionId: any): string {
+function buildTmuxSessionName(cwd: string, sessionId: string): string {
   const parentDir = basename(dirname(cwd));
   const dirName = basename(cwd);
   const dirToken = parentDir.endsWith('.omx-worktrees')
@@ -74,7 +124,7 @@ function buildTmuxSessionName(cwd: any, sessionId: any): string {
   return name.length > 120 ? name.slice(0, 120) : name;
 }
 
-export function resolveOperationalSessionName(cwd: any, sessionId = '', sessionName = ''): string | undefined {
+export function resolveOperationalSessionName(cwd: string, sessionId = '', sessionName = ''): string | undefined {
   const explicit = safeString(sessionName).trim();
   if (explicit) return explicit;
 
@@ -97,7 +147,7 @@ export function resolveOperationalSessionName(cwd: any, sessionId = '', sessionN
   return buildTmuxSessionName(cwd, normalizedSessionId);
 }
 
-export function readRepositoryMetadata(cwd: any): any {
+export function readRepositoryMetadata(cwd: string): RepositoryMetadata {
   const worktreePath = safeString(cwd).trim();
   const repoPath = gitValue(worktreePath, ['rev-parse', '--show-toplevel']) || worktreePath;
   const branch = gitValue(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD']) || undefined;
@@ -109,7 +159,7 @@ export function readRepositoryMetadata(cwd: any): any {
   };
 }
 
-export function extractIssueNumber(text: any): number | undefined {
+export function extractIssueNumber(text: unknown): number | undefined {
   const source = safeString(text);
   const explicit = source.match(/\bissue\s*#(\d+)\b/i);
   if (explicit) return Number.parseInt(explicit[1], 10);
@@ -117,7 +167,7 @@ export function extractIssueNumber(text: any): number | undefined {
   return generic ? Number.parseInt(generic[2], 10) : undefined;
 }
 
-export function extractPrInfo(text: any): any {
+export function extractPrInfo(text: unknown): PrInfo {
   const source = safeString(text);
   const urlMatch = source.match(/https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/i);
   if (urlMatch) {
@@ -135,7 +185,7 @@ export function extractPrInfo(text: any): any {
   return {};
 }
 
-export function extractErrorSummary(text: any, maxLength = 240): string | undefined {
+export function extractErrorSummary(text: unknown, maxLength = 240): string | undefined {
   const source = safeString(text).trim();
   if (!source) return undefined;
   const lines = source.split('\n').map((line: string) => line.trim()).filter(Boolean);
@@ -144,19 +194,19 @@ export function extractErrorSummary(text: any, maxLength = 240): string | undefi
   return summary.length > maxLength ? `${summary.slice(0, maxLength - 1)}…` : summary;
 }
 
-export function parseExecCommandArgs(rawArguments: any): { command: string; workdir: string } {
+export function parseExecCommandArgs(rawArguments: unknown): { command: string; workdir: string } {
   try {
-    const parsed = JSON.parse(safeString(rawArguments));
+    const parsed = JSON.parse(safeString(rawArguments)) as JsonObject;
     return {
-      command: safeString(parsed?.cmd).trim(),
-      workdir: safeString(parsed?.workdir).trim(),
+      command: safeString(parsed.cmd).trim(),
+      workdir: safeString(parsed.workdir).trim(),
     };
   } catch {
     return { command: '', workdir: '' };
   }
 }
 
-export function classifyExecCommand(command: any): any {
+export function classifyExecCommand(command: unknown): ExecCommandClassification | null {
   const source = safeString(command).trim();
   if (!source) return null;
 
@@ -173,7 +223,7 @@ export function classifyExecCommand(command: any): any {
   return null;
 }
 
-export function parseCommandResult(rawOutput: any): any {
+export function parseCommandResult(rawOutput: unknown): CommandResult {
   const output = safeString(rawOutput);
   const exitMatch = output.match(/Process exited with code (\d+)/i);
   const exitCode = exitMatch ? Number.parseInt(exitMatch[1], 10) : undefined;
@@ -201,7 +251,7 @@ export function buildOperationalContext({
   prUrl,
   errorSummary,
   extra = {},
-}: any): any {
+}: OperationalContextInput): Record<string, unknown> {
   const repoMeta = readRepositoryMetadata(cwd);
   const referenceText = [text, output, command, repoMeta.branch, repoMeta.worktree_path].filter(Boolean).join('\n');
   const detectedIssue = issueNumber ?? extractIssueNumber(referenceText);
@@ -227,11 +277,11 @@ export function buildOperationalContext({
   };
 }
 
-export function deriveAssistantSignalEvents(message: any): any[] {
+export function deriveAssistantSignalEvents(message: unknown): AssistantSignalEvent[] {
   const text = safeString(message).trim();
   if (!text) return [];
 
-  const signals: any[] = [];
+  const signals: AssistantSignalEvent[] = [];
   const handoff = HANDOFF_PATTERNS.some((pattern) => pattern.test(text));
   const retryNeeded = RETRY_PATTERNS.some((pattern) => pattern.test(text));
 

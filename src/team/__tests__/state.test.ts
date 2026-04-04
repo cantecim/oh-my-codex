@@ -43,6 +43,7 @@ import {
   transitionDispatchRequest,
   readDispatchRequest,
   resolveDispatchLockTimeoutMs,
+  type TeamTask,
 } from '../state.js';
 
 const ORIGINAL_OMX_TEAM_STATE_ROOT = process.env.OMX_TEAM_STATE_ROOT;
@@ -56,6 +57,17 @@ afterEach(() => {
   if (typeof ORIGINAL_OMX_TEAM_STATE_ROOT === 'string') process.env.OMX_TEAM_STATE_ROOT = ORIGINAL_OMX_TEAM_STATE_ROOT;
   else delete process.env.OMX_TEAM_STATE_ROOT;
 });
+
+async function readTaskFile(path: string): Promise<TeamTask> {
+  return JSON.parse(await readFile(path, 'utf-8')) as TeamTask;
+}
+
+type ClaimedTask = TeamTask & { claim: NonNullable<TeamTask['claim']> };
+
+function requireClaim(task: TeamTask): ClaimedTask {
+  assert.ok(task.claim);
+  return task as ClaimedTask;
+}
 
 async function writeCompatRuntimeFixture(runtimePath: string, runtimeLogPath: string): Promise<void> {
   await writeFile(
@@ -768,7 +780,7 @@ exit 1
       const t = await createTask('team-claim-residual', { subject: 'a', description: 'd', status: 'pending' }, cwd);
 
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-claim-residual', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = await readTaskFile(taskPath);
       current.owner = 'worker-1';
       current.claim = {
         owner: 'worker-1',
@@ -873,7 +885,7 @@ exit 1
       if (!claim.ok) return;
 
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-trans-owner-diverge', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.owner = 'worker-2';
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
@@ -1011,7 +1023,7 @@ exit 1
 
       // Simulate token drift while ownership/status remain in_progress.
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-release-owner', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.token = 'different-token';
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
@@ -1064,7 +1076,7 @@ exit 1
 
       // Backdate leased_until to the past to simulate expiry.
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-lease-trans', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
@@ -1110,7 +1122,7 @@ exit 1
 
       // Backdate leased_until and change owner so ownerMatches is also false.
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-lease-release', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
@@ -1134,7 +1146,7 @@ exit 1
 
       // Backdate leased_until so the claim token is no longer valid.
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-lease-release-owner', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
@@ -1158,7 +1170,7 @@ exit 1
       if (!claim.ok) return;
 
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-reclaim-expired', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 

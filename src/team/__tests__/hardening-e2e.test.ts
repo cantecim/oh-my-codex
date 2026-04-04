@@ -5,9 +5,20 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { initTeamState, createTask, claimTask, readTask, writeAtomic } from '../state.js';
+import { initTeamState, createTask, claimTask, readTask, writeAtomic, type TeamTask } from '../state.js';
 import { monitorTeam } from '../runtime.js';
 import { planWorktreeTarget, ensureWorktree } from '../worktree.js';
+
+type ClaimedTask = TeamTask & { claim: NonNullable<TeamTask['claim']> };
+
+async function readTaskFile(path: string): Promise<TeamTask> {
+  return JSON.parse(await readFile(path, 'utf-8')) as TeamTask;
+}
+
+function requireClaim(task: TeamTask): ClaimedTask {
+  assert.ok(task.claim);
+  return task as ClaimedTask;
+}
 
 async function initRepo(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), 'omx-team-hardening-e2e-repo-'));
@@ -42,7 +53,7 @@ describe('team hardening e2e', () => {
       if (!firstClaim.ok) return;
 
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-hardening-e2e', 'tasks', `task-${task.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readTaskFile(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1_000).toISOString();
       await writeAtomic(taskPath, JSON.stringify(current, null, 2));
 

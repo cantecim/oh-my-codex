@@ -9,13 +9,78 @@ const PLACEHOLDER_TARGET_VALUES = new Set([
   'unset',
 ]);
 
-function asPositiveInteger(value: any): number | null {
+type JsonObject = Record<string, unknown>;
+
+export interface TmuxTargetConfig {
+  type: 'session' | 'pane';
+  value: string;
+}
+
+export interface TmuxHookConfig {
+  enabled: boolean;
+  valid: boolean;
+  reason: string;
+  target: TmuxTargetConfig | null;
+  allowed_modes: string[];
+  cooldown_ms: number;
+  max_injections_per_session: number;
+  prompt_template: string;
+  marker: string;
+  dry_run: boolean;
+  log_level: 'info' | 'debug' | 'error';
+  skip_if_scrolling: boolean;
+}
+
+export interface InjectionStateLike {
+  recent_keys?: Record<string, number>;
+  pane_counts?: Record<string, number>;
+  session_counts?: Record<string, number>;
+  last_injection_ts?: number;
+}
+
+export interface InjectionGuardDecision {
+  allow: boolean;
+  reason: string;
+  dedupeKey?: string;
+}
+
+export interface DedupeKeyInput {
+  threadId?: string;
+  turnId?: string;
+  mode?: string;
+  prompt?: string;
+}
+
+export interface EvaluateInjectionGuardArgs {
+  config: TmuxHookConfig;
+  mode: string | null;
+  sourceText?: string;
+  assistantMessage?: string;
+  threadId?: string;
+  turnId?: string;
+  paneKey?: string;
+  sessionKey?: string;
+  skipQuotaChecks?: boolean;
+  now: number;
+  state: InjectionStateLike;
+}
+
+export interface SendKeysArgv {
+  typeArgv: string[];
+  submitArgv: string[][];
+}
+
+function asRecord(value: unknown): JsonObject {
+  return value && typeof value === 'object' ? value as JsonObject : {};
+}
+
+function asPositiveInteger(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   if (value < 0) return null;
   return Math.floor(value);
 }
 
-export function normalizeTmuxHookConfig(raw: any): any {
+export function normalizeTmuxHookConfig(raw: unknown): TmuxHookConfig {
   if (!raw || typeof raw !== 'object') {
     return {
       enabled: false,
@@ -29,42 +94,44 @@ export function normalizeTmuxHookConfig(raw: any): any {
       marker: DEFAULT_MARKER,
       dry_run: false,
       log_level: 'info',
+      skip_if_scrolling: true,
     };
   }
+  const record = asRecord(raw);
+  const rawTarget = asRecord(record.target);
 
-  const allowedModes = Array.isArray(raw.allowed_modes)
-    ? raw.allowed_modes.filter((mode: any) => typeof mode === 'string' && mode.trim() !== '')
+  const allowedModes = Array.isArray(record.allowed_modes)
+    ? record.allowed_modes.filter((mode): mode is string => typeof mode === 'string' && mode.trim() !== '')
     : [];
 
-  const targetValue = raw.target && typeof raw.target === 'object' && typeof raw.target.value === 'string'
-    ? raw.target.value.trim()
+  const targetValue = typeof rawTarget.value === 'string'
+    ? rawTarget.value.trim()
     : '';
   const targetValueLower = targetValue.toLowerCase();
-  const targetIsValid = raw.target
-    && typeof raw.target === 'object'
-    && (raw.target.type === 'session' || raw.target.type === 'pane')
+  const targetType = rawTarget.type === 'session' || rawTarget.type === 'pane' ? rawTarget.type : null;
+  const targetIsValid = Boolean(targetType
     && targetValue !== ''
-    && !PLACEHOLDER_TARGET_VALUES.has(targetValueLower);
+    && !PLACEHOLDER_TARGET_VALUES.has(targetValueLower));
 
-  const cooldown = asPositiveInteger(raw.cooldown_ms);
-  const maxPerPane = asPositiveInteger(raw.max_injections_per_pane);
-  const maxPerSession = asPositiveInteger(raw.max_injections_per_session);
+  const cooldown = asPositiveInteger(record.cooldown_ms);
+  const maxPerPane = asPositiveInteger(record.max_injections_per_pane);
+  const maxPerSession = asPositiveInteger(record.max_injections_per_session);
 
-  const marker = typeof raw.marker === 'string' && raw.marker.trim() !== ''
-    ? raw.marker
+  const marker = typeof record.marker === 'string' && record.marker.trim() !== ''
+    ? record.marker
     : DEFAULT_MARKER;
 
-  const promptTemplate = typeof raw.prompt_template === 'string' && raw.prompt_template.trim() !== ''
-    ? raw.prompt_template
+  const promptTemplate = typeof record.prompt_template === 'string' && record.prompt_template.trim() !== ''
+    ? record.prompt_template
     : `Continue from current mode state. ${marker}`;
 
-  const logLevel = raw.log_level === 'error' || raw.log_level === 'debug' ? raw.log_level : 'info';
+  const logLevel = record.log_level === 'error' || record.log_level === 'debug' ? record.log_level : 'info';
 
   return {
-    enabled: raw.enabled === true,
+    enabled: record.enabled === true,
     valid: targetIsValid,
     reason: targetIsValid ? 'ok' : 'invalid_target',
-    target: targetIsValid ? { type: raw.target.type, value: raw.target.value } : null,
+    target: targetIsValid && targetType ? { type: targetType, value: targetValue } : null,
     allowed_modes: allowedModes.length > 0 ? allowedModes : DEFAULT_ALLOWED_MODES,
     cooldown_ms: cooldown === null ? 15000 : cooldown,
     // Canonical setting is per-pane. Keep max_injections_per_session as legacy alias.
@@ -73,22 +140,22 @@ export function normalizeTmuxHookConfig(raw: any): any {
       : (maxPerPane === 0 ? 200 : maxPerPane),
     prompt_template: promptTemplate,
     marker,
-    dry_run: raw.dry_run === true,
+    dry_run: record.dry_run === true,
     log_level: logLevel,
     // Skip injection when the target pane is in copy-mode / scrollback (default: true).
-    skip_if_scrolling: raw.skip_if_scrolling === false ? false : true,
+    skip_if_scrolling: record.skip_if_scrolling === false ? false : true,
   };
 }
 
-export function pickActiveMode(activeModes: any, allowedModes: any): string | null {
-  const activeSet = new Set((activeModes || []).filter((mode: any) => typeof mode === 'string'));
-  for (const mode of allowedModes || []) {
+export function pickActiveMode(activeModes: unknown, allowedModes: unknown): string | null {
+  const activeSet = new Set((Array.isArray(activeModes) ? activeModes : []).filter((mode): mode is string => typeof mode === 'string'));
+  for (const mode of (Array.isArray(allowedModes) ? allowedModes : [])) {
     if (activeSet.has(mode)) return mode;
   }
   return null;
 }
 
-export function buildDedupeKey({ threadId, turnId, mode, prompt }: any): string {
+export function buildDedupeKey({ threadId, turnId, mode, prompt }: DedupeKeyInput): string {
   const keyBase = `${threadId || 'no-thread'}|${turnId || 'no-turn'}|${mode || 'no-mode'}|${prompt || ''}`;
   return createHash('sha256').update(keyBase).digest('hex');
 }
@@ -105,7 +172,7 @@ export function evaluateInjectionGuards({
   skipQuotaChecks,
   now,
   state,
-}: any): any {
+}: EvaluateInjectionGuardArgs): InjectionGuardDecision {
   if (!config.enabled) return { allow: false, reason: 'disabled' };
   if (!config.valid || !config.target) return { allow: false, reason: 'invalid_config' };
   if (!mode) return { allow: false, reason: 'mode_not_allowed' };
@@ -151,7 +218,7 @@ export function evaluateInjectionGuards({
  * (scrollback). The command prints "1" if the pane is in any mode, "0"
  * otherwise.
  */
-export function buildPaneInModeArgv(paneTarget: any): string[] {
+export function buildPaneInModeArgv(paneTarget: string): string[] {
   return ['display-message', '-p', '-t', paneTarget, '#{pane_in_mode}'];
 }
 
@@ -160,7 +227,7 @@ export function buildPaneInModeArgv(paneTarget: any): string[] {
  * Used to detect when the agent process has exited and the pane has returned
  * to a shell (zsh, bash, fish, etc.).
  */
-export function buildPaneCurrentCommandArgv(paneTarget: any): string[] {
+export function buildPaneCurrentCommandArgv(paneTarget: string): string[] {
   return ['display-message', '-p', '-t', paneTarget, '#{pane_current_command}'];
 }
 
@@ -170,7 +237,7 @@ const SHELL_COMMANDS = new Set(['zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'csh
  * Returns true when the pane's foreground process is an interactive shell,
  * meaning the agent has exited and injection would land on a bare prompt.
  */
-export function isPaneRunningShell(paneCurrentCommand: any): boolean {
+export function isPaneRunningShell(paneCurrentCommand: unknown): boolean {
   if (typeof paneCurrentCommand !== 'string') return false;
   const cmd = paneCurrentCommand.trim().toLowerCase();
   if (cmd === '') return false;
@@ -248,17 +315,17 @@ export function resolveCodexPane(): string {
   return '';
 }
 
-export function normalizeTmuxCapture(value: any): string {
+export function normalizeTmuxCapture(value: unknown): string {
   return String(value ?? '')
     .replace(/\r/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function normalizePaneLines(capturedOrLines: any): string[] {
+function normalizePaneLines(capturedOrLines: unknown): string[] {
   if (Array.isArray(capturedOrLines)) {
     return capturedOrLines
-      .map((line: any) => String(line ?? '').replace(/\r/g, '').trimEnd())
+      .map((line) => String(line ?? '').replace(/\r/g, '').trimEnd())
       .filter((line: string) => line.trim() !== '');
   }
 
@@ -268,7 +335,7 @@ function normalizePaneLines(capturedOrLines: any): string[] {
     .filter((line) => line.trim() !== '');
 }
 
-export function paneIsBootstrapping(capturedOrLines: any): boolean {
+export function paneIsBootstrapping(capturedOrLines: unknown): boolean {
   const lines = normalizePaneLines(capturedOrLines);
   return lines.some((line) =>
     /\b(loading|initializing|starting up)\b/i.test(line)
@@ -277,7 +344,7 @@ export function paneIsBootstrapping(capturedOrLines: any): boolean {
   );
 }
 
-export function paneLooksReady(captured: any): boolean {
+export function paneLooksReady(captured: unknown): boolean {
   const content = String(captured ?? '').trimEnd();
   if (content === '') return false;
 
@@ -298,7 +365,7 @@ export function paneLooksReady(captured: any): boolean {
   return lines.some((line) => /^\s*(?:[›>❯]\s*)?[A-Z][A-Z0-9]+-\d+\s+only(?:\s*(?:…|\.{3}))?\s*$/iu.test(line));
 }
 
-export function paneShowsCodexViewport(captured: any): boolean {
+export function paneShowsCodexViewport(captured: unknown): boolean {
   const lines = normalizePaneLines(captured);
   if (lines.length === 0) return false;
   if (paneIsBootstrapping(lines)) return false;
@@ -309,7 +376,7 @@ export function paneShowsCodexViewport(captured: any): boolean {
   return lines.some((line) => /(?:^|\s)(?:model|directory):/i.test(line));
 }
 
-export function paneHasActiveTask(captured: any): boolean {
+export function paneHasActiveTask(captured: unknown): boolean {
   const tail = normalizePaneLines(captured).map((line) => line.trim()).slice(-40);
   if (tail.some((line) => /\b\d+\s+background terminal running\b/i.test(line))) return true;
   if (tail.some((line) => /esc to interrupt/i.test(line))) return true;
@@ -318,15 +385,25 @@ export function paneHasActiveTask(captured: any): boolean {
   return tail.some((line) => /^[·✻]\s+[A-Za-z][A-Za-z0-9''-]*(?:\s+[A-Za-z][A-Za-z0-9''-]*){0,3}(?:…|\.{3})$/u.test(line));
 }
 
-export function buildCapturePaneArgv(paneTarget: any, tailLines = 80): string[] {
+export function buildCapturePaneArgv(paneTarget: string, tailLines = 80): string[] {
   return ['capture-pane', '-t', paneTarget, '-p', '-S', `-${tailLines}`];
 }
 
-export function buildVisibleCapturePaneArgv(paneTarget: any): string[] {
+export function buildVisibleCapturePaneArgv(paneTarget: string): string[] {
   return ['capture-pane', '-t', paneTarget, '-p'];
 }
 
-export function buildSendKeysArgv({ paneTarget, prompt, dryRun, submitKeyPresses = 2 }: any): any {
+export function buildSendKeysArgv({
+  paneTarget,
+  prompt,
+  dryRun,
+  submitKeyPresses = 2,
+}: {
+  paneTarget: string;
+  prompt: string;
+  dryRun: boolean;
+  submitKeyPresses?: number;
+}): SendKeysArgv | null {
   if (dryRun) return null;
   const pressCountRaw = Number.isFinite(submitKeyPresses) ? Math.floor(submitKeyPresses) : 2;
   const pressCount = Math.max(1, Math.min(4, pressCountRaw));

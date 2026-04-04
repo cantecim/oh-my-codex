@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// @ts-nocheck
 
 import { readdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -8,9 +7,9 @@ import process from 'node:process';
 
 const root = process.cwd();
 const scriptsRoot = join(root, 'scripts');
-const includeExtensions = new Set(['.js', '.mjs']);
+const includeExtensions = new Set<string>(['.js', '.mjs']);
 
-function shouldCheck(path) {
+function shouldCheck(path: string): boolean {
   return [...includeExtensions].some((ext) => path.endsWith(ext));
 }
 
@@ -37,7 +36,7 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const failures = [];
+const failures: Array<{ file: string; output: string }> = [];
 for (const file of files) {
   const result = spawnSync(process.execPath, ['--check', resolve(file)], {
     cwd: root,

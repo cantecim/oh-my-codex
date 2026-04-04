@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Team worker: heartbeat, idle detection, and leader notification.
  */
@@ -14,7 +13,59 @@ import { resolvePaneTarget } from './tmux-injection.js';
 import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
 
-async function readTeamStateRootFromJson(path) {
+interface ParsedTeamWorker {
+  teamName: string;
+  workerName: string;
+}
+
+interface TeamPhaseSnapshot {
+  currentPhase: string;
+  terminal: boolean;
+  completedAt: string;
+}
+
+interface WorkerStatusSnapshot {
+  state: string;
+  updated_at: string | null;
+  fresh: boolean;
+}
+
+interface WorkerHeartbeatSnapshot {
+  last_turn_at: string | null;
+  fresh: boolean;
+  missing: boolean;
+}
+
+interface TeamWorkerInfo {
+  name?: string;
+}
+
+interface TeamIdleCheckInfo {
+  workers: TeamWorkerInfo[];
+  tmuxSession: string;
+  leaderPaneId: string;
+}
+
+interface LeaderPaneDeferredArgs {
+  stateDir: string;
+  logsDir: string;
+  teamName: string;
+  workerName: string;
+  tmuxSession: string;
+  leaderPaneId: string;
+  reason?: string;
+  paneCurrentCommand?: string;
+  sourceType?: string;
+}
+
+interface NotifyLeaderArgs {
+  cwd: string;
+  stateDir: string;
+  logsDir: string;
+  parsedTeamWorker: ParsedTeamWorker;
+}
+
+async function readTeamStateRootFromJson(path: string) {
   try {
     if (!existsSync(path)) return null;
     const parsed = JSON.parse(await readFile(path, 'utf-8'));
@@ -27,7 +78,7 @@ async function readTeamStateRootFromJson(path) {
   }
 }
 
-export async function resolveTeamStateDirForWorker(cwd, parsedTeamWorker) {
+export async function resolveTeamStateDirForWorker(cwd: string, parsedTeamWorker: ParsedTeamWorker) {
   const explicitStateRoot = safeString(process.env.OMX_TEAM_STATE_ROOT || '').trim();
   if (explicitStateRoot) {
     return resolvePath(cwd, explicitStateRoot);
@@ -64,7 +115,7 @@ export async function resolveTeamStateDirForWorker(cwd, parsedTeamWorker) {
   return join(cwd, '.omx', 'state');
 }
 
-export function parseTeamWorkerEnv(rawValue) {
+export function parseTeamWorkerEnv(rawValue: unknown): ParsedTeamWorker | null {
   if (typeof rawValue !== 'string') return null;
   const match = /^([a-z0-9][a-z0-9-]{0,29})\/(worker-\d+)$/.exec(rawValue.trim());
   if (!match) return null;
@@ -108,7 +159,7 @@ export function resolveHeartbeatStaleMs() {
   return 180_000;
 }
 
-function parseIsoMs(value) {
+function parseIsoMs(value: unknown) {
   const normalized = safeString(value).trim();
   if (!normalized) return null;
   const ms = Date.parse(normalized);
@@ -116,23 +167,24 @@ function parseIsoMs(value) {
   return ms;
 }
 
-function isFreshIso(value, maxAgeMs, nowMs) {
+function isFreshIso(value: unknown, maxAgeMs: number, nowMs: number) {
   const ts = parseIsoMs(value);
   if (!Number.isFinite(ts)) return false;
-  return (nowMs - ts) <= maxAgeMs;
+  return (nowMs - (ts as number)) <= maxAgeMs;
 }
 
-function resolveTerminalAtFromPhaseDoc(parsed, fallbackIso) {
-  const transitions = Array.isArray(parsed && parsed.transitions) ? parsed.transitions : [];
+function resolveTerminalAtFromPhaseDoc(parsed: unknown, fallbackIso: string) {
+  const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  const transitions = Array.isArray(record.transitions) ? record.transitions : [];
   for (let idx = transitions.length - 1; idx >= 0; idx -= 1) {
     const at = safeString(transitions[idx] && transitions[idx].at).trim();
     if (at) return at;
   }
-  const updatedAt = safeString(parsed && parsed.updated_at).trim();
+  const updatedAt = safeString(record.updated_at).trim();
   return updatedAt || fallbackIso;
 }
 
-async function readTeamPhaseSnapshot(stateDir, teamName, nowIso = new Date().toISOString()) {
+async function readTeamPhaseSnapshot(stateDir: string, teamName: string, nowIso = new Date().toISOString()): Promise<TeamPhaseSnapshot> {
   const phasePath = join(stateDir, 'team', teamName, 'phase.json');
   try {
     if (!existsSync(phasePath)) return { currentPhase: '', terminal: false, completedAt: '' };
@@ -148,7 +200,7 @@ async function readTeamPhaseSnapshot(stateDir, teamName, nowIso = new Date().toI
   }
 }
 
-async function syncScopedTeamStateFromPhase(stateDir, teamName, phaseSnapshot, nowIso = new Date().toISOString()) {
+async function syncScopedTeamStateFromPhase(stateDir: string, teamName: string, phaseSnapshot: TeamPhaseSnapshot, nowIso = new Date().toISOString()) {
   if (!phaseSnapshot || !phaseSnapshot.terminal) return false;
   const teamStatePath = join(stateDir, 'team-state.json');
   try {
@@ -183,7 +235,7 @@ async function syncScopedTeamStateFromPhase(stateDir, teamName, phaseSnapshot, n
   }
 }
 
-async function readWorkerStatusSnapshot(stateDir, teamName, workerName, nowMs = Date.now()) {
+async function readWorkerStatusSnapshot(stateDir: string, teamName: string, workerName: string, nowMs = Date.now()): Promise<WorkerStatusSnapshot> {
   const statusPath = join(stateDir, 'team', teamName, 'workers', workerName, 'status.json');
   try {
     if (!existsSync(statusPath)) return { state: 'unknown', updated_at: null, fresh: false };
@@ -209,7 +261,7 @@ async function readWorkerStatusSnapshot(stateDir, teamName, workerName, nowMs = 
   }
 }
 
-async function readWorkerHeartbeatSnapshot(stateDir, teamName, workerName, nowMs = Date.now()) {
+async function readWorkerHeartbeatSnapshot(stateDir: string, teamName: string, workerName: string, nowMs = Date.now()): Promise<WorkerHeartbeatSnapshot> {
   const heartbeatPath = join(stateDir, 'team', teamName, 'workers', workerName, 'heartbeat.json');
   try {
     if (!existsSync(heartbeatPath)) return { last_turn_at: null, fresh: true, missing: true };
@@ -223,7 +275,7 @@ async function readWorkerHeartbeatSnapshot(stateDir, teamName, workerName, nowMs
   }
 }
 
-export async function readWorkerStatusState(stateDir, teamName, workerName) {
+export async function readWorkerStatusState(stateDir: string, teamName: string, workerName: string) {
   if (!workerName) return 'unknown';
   const statusPath = join(stateDir, 'team', teamName, 'workers', workerName, 'status.json');
   try {
@@ -237,7 +289,7 @@ export async function readWorkerStatusState(stateDir, teamName, workerName) {
   }
 }
 
-export async function readTeamWorkersForIdleCheck(stateDir, teamName) {
+export async function readTeamWorkersForIdleCheck(stateDir: string, teamName: string): Promise<TeamIdleCheckInfo | null> {
   // Try manifest.v2.json first (preferred), then config.json
   const manifestPath = join(stateDir, 'team', teamName, 'manifest.v2.json');
   const configPath = join(stateDir, 'team', teamName, 'config.json');
@@ -258,7 +310,7 @@ export async function readTeamWorkersForIdleCheck(stateDir, teamName) {
   }
 }
 
-async function resolveCanonicalLeaderPaneId(_tmuxSession, leaderPaneId) {
+async function resolveCanonicalLeaderPaneId(_tmuxSession: string, leaderPaneId: string) {
   const normalizedLeaderPaneId = safeString(leaderPaneId).trim();
   if (normalizedLeaderPaneId) {
     try {
@@ -283,7 +335,7 @@ async function emitLeaderPaneMissingDeferred({
   reason = 'leader_pane_missing_no_injection',
   paneCurrentCommand = '',
   sourceType = 'unknown',
-}) {
+}: LeaderPaneDeferredArgs) {
   const nowIso = new Date().toISOString();
   await logTmuxHookEvent(logsDir, {
     timestamp: nowIso,
@@ -319,7 +371,7 @@ async function emitLeaderPaneMissingDeferred({
   await appendFile(eventsPath, JSON.stringify(event) + '\n').catch(() => {});
 }
 
-export async function updateWorkerHeartbeat(stateDir, teamName, workerName) {
+export async function updateWorkerHeartbeat(stateDir: string, teamName: string, workerName: string) {
   const heartbeatPath = join(stateDir, 'team', teamName, 'workers', workerName, 'heartbeat.json');
   let turnCount = 0;
   try {
@@ -338,7 +390,8 @@ export async function updateWorkerHeartbeat(stateDir, teamName, workerName) {
   await rename(tmpPath, heartbeatPath);
 }
 
-export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, parsedTeamWorker }) {
+export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, parsedTeamWorker }: NotifyLeaderArgs) {
+  void cwd;
   const { teamName, workerName } = parsedTeamWorker;
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
@@ -362,7 +415,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
 
   // Check cooldown to prevent notification spam
   const idleStatePath = join(stateDir, 'team', teamName, 'all-workers-idle.json');
-  const idleState = (await readJsonIfExists(idleStatePath, null)) || {};
+  const idleState = (await readJsonIfExists<{ last_notified_at_ms?: unknown } | null>(idleStatePath, null)) || {};
   const cooldownMs = resolveAllWorkersIdleCooldownMs();
   const lastNotifiedMs = asNumber(idleState.last_notified_at_ms) ?? 0;
   if ((nowMs - lastNotifiedMs) < cooldownMs) return;
@@ -483,7 +536,8 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
   }
 }
 
-export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, parsedTeamWorker }) {
+export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, parsedTeamWorker }: NotifyLeaderArgs) {
+  void cwd;
   if (!resolveWorkerIdleNotifyEnabled()) return;
 
   const { teamName, workerName } = parsedTeamWorker;

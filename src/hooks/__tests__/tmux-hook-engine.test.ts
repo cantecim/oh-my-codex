@@ -265,8 +265,8 @@ describe('isPaneRunningShell', () => {
 
   it('returns false for non-string or empty input', () => {
     assert.equal(isPaneRunningShell(''), false);
-    assert.equal(isPaneRunningShell(null as any), false);
-    assert.equal(isPaneRunningShell(undefined as any), false);
+    assert.equal(isPaneRunningShell(null), false);
+    assert.equal(isPaneRunningShell(undefined), false);
   });
 });
 

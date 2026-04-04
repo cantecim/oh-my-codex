@@ -25,7 +25,31 @@ const VERDICT_PATTERNS = [
  */
 const VERDICT_CANDIDATE_RE = /(?:\*\*Status\*\*\s*:|Verdict\s*:)/i;
 
-function extractJsonCandidates(rawMessage: any): string[] {
+interface VisualRuntimeFeedbackArgs {
+  cwd: string;
+  output: string;
+  sessionId?: string;
+}
+
+interface VisualVerdictResult {
+  verdict: string;
+  raw: string;
+}
+
+interface VisualVerdictPayload {
+  cwd: string;
+  payload: Record<string, unknown>;
+  stateDir: string;
+  logsDir: string;
+  sessionId?: string;
+  turnId?: string;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function extractJsonCandidates(rawMessage: unknown): string[] {
   const message = safeString(rawMessage).trim();
   if (!message) return [];
 
@@ -38,7 +62,7 @@ function extractJsonCandidates(rawMessage: any): string[] {
   return candidates;
 }
 
-async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId }: any): Promise<void> {
+async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId }: VisualRuntimeFeedbackArgs): Promise<void> {
   if (!cwd || !output) return;
 
   const candidates = extractJsonCandidates(output);
@@ -63,7 +87,7 @@ async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId }: any
  * Attempt to extract a structured verdict from free-form text.
  * Returns `{ verdict, raw }` on success, `null` otherwise.
  */
-export function parseVisualVerdict(text: any): { verdict: string; raw: string } | null {
+export function parseVisualVerdict(text: unknown): VisualVerdictResult | null {
   if (!text || typeof text !== 'string') return null;
   for (const pattern of VERDICT_PATTERNS) {
     const match = text.match(pattern);
@@ -84,7 +108,7 @@ export function parseVisualVerdict(text: any): { verdict: string; raw: string } 
  *
  * Module import failure is handled by the caller in notify-hook.ts.
  */
-export async function maybePersistVisualVerdict({ cwd, payload, stateDir, logsDir, sessionId, turnId }: any): Promise<void> {
+export async function maybePersistVisualVerdict({ cwd, payload, stateDir, logsDir, sessionId, turnId }: VisualVerdictPayload): Promise<void> {
   const output = safeString(
     payload?.['last-assistant-message'] || payload?.last_assistant_message || '',
   );
@@ -94,12 +118,12 @@ export async function maybePersistVisualVerdict({ cwd, payload, stateDir, logsDi
   // Non-fatal and observable via warn-level structured logging.
   try {
     await maybePersistRuntimeVisualFeedback({ cwd, output, sessionId });
-  } catch (err: any) {
+  } catch (err: unknown) {
     await logNotifyHookEvent(logsDir, {
       timestamp: new Date().toISOString(),
       level: 'warn',
       type: 'visual_runtime_feedback_persist_failure',
-      error: err?.message || String(err),
+      error: errorMessage(err),
       session_id: sessionId,
       turn_id: turnId,
     });
@@ -144,13 +168,13 @@ export async function maybePersistVisualVerdict({ cwd, payload, stateDir, logsDi
       level: 'info',
       type: 'visual_verdict_persisted',
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Warn level: persistence write failure with turn/session context
     await logNotifyHookEvent(logsDir, {
       timestamp: new Date().toISOString(),
       level: 'warn',
       type: 'visual_verdict_write_failure',
-      error: err?.message || String(err),
+      error: errorMessage(err),
       session_id: sessionId,
       turn_id: turnId,
     });

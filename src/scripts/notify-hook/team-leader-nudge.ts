@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Team leader nudge: remind the leader to check teammate/mailbox state.
  */
@@ -24,11 +23,114 @@ const ACK_LIKE_PATTERNS = [
   /^(?:on it|will do|i(?:'|’)ll do it|working on it)[.!]*$/i,
 ];
 
-async function decisionTrace(cwd, event, payload = {}) {
+interface TaskCounts {
+  pending: number;
+  blocked: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+}
+
+interface LeaderActionOptions {
+  allWorkersIdle?: boolean;
+  workerPanesAlive?: boolean;
+  workerPanesReusable?: boolean;
+  workerPaneIdsConfigured?: boolean;
+  taskCounts?: Partial<TaskCounts>;
+  teamProgressStalled?: boolean;
+  leaderActionState?: string;
+}
+
+interface WorkerStatusSnapshot {
+  state: string;
+  current_task_id: string;
+  missing?: boolean;
+}
+
+interface WorkerHeartbeatSnapshot {
+  turn_count: number | null;
+  missing: boolean;
+}
+
+interface WorkerProgressSnapshot {
+  worker: string;
+  state: string;
+  current_task_id: string;
+  status_missing: boolean;
+  turn_count: number | null;
+  heartbeat_missing: boolean;
+}
+
+interface TaskSignatureEntry {
+  id: string;
+  owner: string;
+  status: string;
+}
+
+interface TeamTaskProgressSnapshot {
+  taskCounts: TaskCounts;
+  taskSignature: TaskSignatureEntry[];
+  workRemaining: boolean;
+}
+
+interface TeamProgressSnapshot extends TeamTaskProgressSnapshot {
+  workerSnapshot: WorkerProgressSnapshot[];
+  missingSignalWorkers: number;
+  signature: string;
+}
+
+interface MailboxMessage {
+  message_id?: string;
+  created_at?: string;
+  timestamp?: string;
+  from_worker?: string;
+  from?: string;
+  body?: string;
+}
+
+interface ProgressStateEntry {
+  signature?: string;
+  last_progress_at?: string;
+  observed_at?: string;
+  missing_signal_workers?: number;
+  work_remaining?: boolean;
+  leader_action_state?: string;
+}
+
+interface NudgeStateEntry {
+  at?: string;
+  last_message_id?: string;
+  reason?: string;
+  worker_count?: number;
+}
+
+interface NudgeState {
+  last_nudged_by_team: Record<string, NudgeStateEntry>;
+  last_idle_nudged_by_team: Record<string, NudgeStateEntry>;
+  progress_by_team: Record<string, ProgressStateEntry>;
+}
+
+interface TeamWorkerConfig {
+  name?: string;
+  pane_id?: string;
+}
+
+interface MaybeNudgeTeamLeaderArgs {
+  cwd: string;
+  stateDir: string;
+  logsDir: string;
+  preComputedLeaderStale?: boolean;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : safeString(error);
+}
+
+async function decisionTrace(cwd: string, event: string, payload: Record<string, unknown> = {}) {
   await traceDecision(cwd, 'team-leader-nudge', event, payload).catch(() => {});
 }
 
-function leaderNudgeTraceId(teamName: any, nowIso: string): string {
+function leaderNudgeTraceId(teamName: string, nowIso: string): string {
   return buildRuntimeTraceId('leader-nudge', safeString(teamName).trim() || 'unknown', safeString(nowIso).trim() || 'tick');
 }
 
@@ -73,15 +175,15 @@ export function resolveWorkerTurnStallThresholdMs() {
   return 30_000;
 }
 
-function buildStatusCheckReminder(teamName) {
+function buildStatusCheckReminder(teamName: string) {
   return `Next: check messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ${teamName}.`;
 }
 
-function buildMailboxCheckReminder(teamName) {
+function buildMailboxCheckReminder(teamName: string) {
   return `Next: read messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ${teamName}.`;
 }
 
-function buildWorkerStartEvidenceReminder(teamName, workerName) {
+function buildWorkerStartEvidenceReminder(teamName: string, workerName: string) {
   return `Next: check ${workerName} msg/output, confirm task in omx team status ${teamName}, then reassign/nudge.`;
 }
 
@@ -92,10 +194,12 @@ function classifyLeaderActionState({
   workerPaneIdsConfigured = true,
   taskCounts = {},
   teamProgressStalled = false,
-} = {}) {
-  const pending = Number.isFinite(taskCounts.pending) ? taskCounts.pending : 0;
-  const blocked = Number.isFinite(taskCounts.blocked) ? taskCounts.blocked : 0;
-  const inProgress = Number.isFinite(taskCounts.in_progress) ? taskCounts.in_progress : 0;
+}: LeaderActionOptions = {}) {
+  void workerPanesAlive;
+  void workerPaneIdsConfigured;
+  const pending = Number.isFinite(taskCounts.pending) ? (taskCounts.pending ?? 0) : 0;
+  const blocked = Number.isFinite(taskCounts.blocked) ? (taskCounts.blocked ?? 0) : 0;
+  const inProgress = Number.isFinite(taskCounts.in_progress) ? (taskCounts.in_progress ?? 0) : 0;
   const tasksComplete = pending === 0 && blocked === 0 && inProgress === 0;
   const pendingFollowUpTasks = allWorkersIdle && pending > 0 && blocked === 0 && inProgress === 0;
   const blockedWaitingOnLeader = allWorkersIdle && blocked > 0 && pending === 0 && inProgress === 0;
@@ -109,16 +213,17 @@ function classifyLeaderActionState({
   return 'still_actionable';
 }
 
-function buildLeaderActionGuidance(teamName, {
+function buildLeaderActionGuidance(teamName: string, {
   allWorkersIdle = false,
   workerPanesAlive = false,
   workerPanesReusable = false,
   taskCounts = {},
   leaderActionState = 'still_actionable',
-} = {}) {
-  const pending = Number.isFinite(taskCounts.pending) ? taskCounts.pending : 0;
-  const blocked = Number.isFinite(taskCounts.blocked) ? taskCounts.blocked : 0;
-  const inProgress = Number.isFinite(taskCounts.in_progress) ? taskCounts.in_progress : 0;
+}: LeaderActionOptions = {}) {
+  void workerPanesAlive;
+  const pending = Number.isFinite(taskCounts.pending) ? (taskCounts.pending ?? 0) : 0;
+  const blocked = Number.isFinite(taskCounts.blocked) ? (taskCounts.blocked ?? 0) : 0;
+  const inProgress = Number.isFinite(taskCounts.in_progress) ? (taskCounts.in_progress ?? 0) : 0;
   const pendingFollowUpTasks = allWorkersIdle && pending > 0 && blocked === 0 && inProgress === 0;
 
   if (pendingFollowUpTasks) {
@@ -135,7 +240,7 @@ function buildLeaderActionGuidance(teamName, {
   return buildStatusCheckReminder(teamName);
 }
 
-export async function checkWorkerPanesAlive(tmuxTarget, workerPaneIds = []) {
+export async function checkWorkerPanesAlive(tmuxTarget: string, workerPaneIds: string[] = []) {
   const sessionName = safeString(tmuxTarget).split(':')[0];
   const target = safeString(tmuxTarget).trim();
   const workerPaneIdSet = new Set(
@@ -160,8 +265,8 @@ export async function checkWorkerPanesAlive(tmuxTarget, workerPaneIds = []) {
           return { alive: true, paneCount: relevantLines.length, sessionName, relevantLines };
         }
         break;
-      } catch (error) {
-        const message = safeString(error && error.message ? error.message : String(error)).trim().toLowerCase();
+      } catch (error: unknown) {
+        const message = errorMessage(error).trim().toLowerCase();
         const timedOut = message.startsWith('timeout after ');
         if (!timedOut) break;
       }
@@ -170,21 +275,22 @@ export async function checkWorkerPanesAlive(tmuxTarget, workerPaneIds = []) {
   return { alive: false, paneCount: 0, sessionName, relevantLines: [] };
 }
 
-export async function isLeaderStale(stateDir, thresholdMs, nowMs) {
+export async function isLeaderStale(stateDir: string, thresholdMs: number, nowMs: number) {
   return isLeaderRuntimeStale(stateDir, thresholdMs, nowMs);
 }
 
-function resolveTerminalAtFromPhaseDoc(parsed, fallbackIso) {
-  const transitions = Array.isArray(parsed && parsed.transitions) ? parsed.transitions : [];
+function resolveTerminalAtFromPhaseDoc(parsed: unknown, fallbackIso: string) {
+  const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  const transitions = Array.isArray(record.transitions) ? record.transitions : [];
   for (let idx = transitions.length - 1; idx >= 0; idx -= 1) {
     const at = safeString(transitions[idx] && transitions[idx].at).trim();
     if (at) return at;
   }
-  const updatedAt = safeString(parsed && parsed.updated_at).trim();
+  const updatedAt = safeString(record.updated_at).trim();
   return updatedAt || fallbackIso;
 }
 
-async function readTeamPhaseSnapshot(stateDir, teamName, nowIso) {
+async function readTeamPhaseSnapshot(stateDir: string, teamName: string, nowIso: string) {
   const phasePath = join(stateDir, 'team', teamName, 'phase.json');
   try {
     if (!existsSync(phasePath)) return { currentPhase: '', terminal: false, completedAt: '' };
@@ -200,7 +306,12 @@ async function readTeamPhaseSnapshot(stateDir, teamName, nowIso) {
   }
 }
 
-async function syncScopedTeamStateFromPhase(teamStatePath, teamName, phaseSnapshot, nowIso) {
+async function syncScopedTeamStateFromPhase(
+  teamStatePath: string,
+  teamName: string,
+  phaseSnapshot: { terminal: boolean; currentPhase: string; completedAt: string },
+  nowIso: string,
+) {
   if (!phaseSnapshot || !phaseSnapshot.terminal) return false;
   try {
     if (!existsSync(teamStatePath)) return false;
@@ -234,7 +345,7 @@ async function syncScopedTeamStateFromPhase(teamStatePath, teamName, phaseSnapsh
   }
 }
 
-async function resolveCurrentSessionId(stateDir) {
+async function resolveCurrentSessionId(stateDir: string) {
   const fromEnv = safeString(
     process.env.OMX_SESSION_ID
     || process.env.CODEX_SESSION_ID
@@ -254,7 +365,7 @@ async function resolveCurrentSessionId(stateDir) {
   }
 }
 
-async function readWorkerStatusSnapshot(stateDir, teamName, workerName) {
+async function readWorkerStatusSnapshot(stateDir: string, teamName: string, workerName: string): Promise<WorkerStatusSnapshot> {
   if (!workerName) return { state: 'unknown', current_task_id: '' };
   const path = join(stateDir, 'team', teamName, 'workers', workerName, 'status.json');
   try {
@@ -270,12 +381,12 @@ async function readWorkerStatusSnapshot(stateDir, teamName, workerName) {
   }
 }
 
-async function readWorkerStatusState(stateDir, teamName, workerName) {
+async function readWorkerStatusState(stateDir: string, teamName: string, workerName: string) {
   const snapshot = await readWorkerStatusSnapshot(stateDir, teamName, workerName);
   return snapshot.state;
 }
 
-async function readWorkerHeartbeatSnapshot(stateDir, teamName, workerName) {
+async function readWorkerHeartbeatSnapshot(stateDir: string, teamName: string, workerName: string): Promise<WorkerHeartbeatSnapshot> {
   if (!workerName) return { turn_count: null, missing: true };
   const path = join(stateDir, 'team', teamName, 'workers', workerName, 'heartbeat.json');
   try {
@@ -290,7 +401,7 @@ async function readWorkerHeartbeatSnapshot(stateDir, teamName, workerName) {
   }
 }
 
-async function readTeamTaskProgressSnapshot(stateDir, teamName) {
+async function readTeamTaskProgressSnapshot(stateDir: string, teamName: string): Promise<TeamTaskProgressSnapshot> {
   const tasksDir = join(stateDir, 'team', teamName, 'tasks');
   if (!existsSync(tasksDir)) {
     return {
@@ -312,7 +423,7 @@ async function readTeamTaskProgressSnapshot(stateDir, teamName) {
         const id = safeString(parsed?.id || entry.replace(/^task-/, '').replace(/\.json$/, '')).trim();
         const status = safeString(parsed?.status || 'pending').trim() || 'pending';
         const owner = safeString(parsed?.owner || '').trim();
-        if (Object.hasOwn(taskCounts, status)) taskCounts[status] += 1;
+        if (Object.hasOwn(taskCounts, status)) taskCounts[status as keyof typeof taskCounts] += 1;
         taskSignature.push({ id, owner, status });
       } catch {
         // ignore malformed task files
@@ -329,7 +440,7 @@ async function readTeamTaskProgressSnapshot(stateDir, teamName) {
   };
 }
 
-async function readTeamProgressSnapshot(stateDir, teamName, workerNames) {
+async function readTeamProgressSnapshot(stateDir: string, teamName: string, workerNames: string[]): Promise<TeamProgressSnapshot> {
   const [taskSnapshot, workerSnapshot] = await Promise.all([
     readTeamTaskProgressSnapshot(stateDir, teamName),
     Promise.all(
@@ -365,37 +476,37 @@ async function readTeamProgressSnapshot(stateDir, teamName, workerNames) {
   };
 }
 
-function readPreviousWorkerTurnCounts(previousSignature) {
+function readPreviousWorkerTurnCounts(previousSignature: string): Map<string, number | null> {
   try {
     const parsed = JSON.parse(previousSignature || '{}');
     const workers = Array.isArray(parsed?.workers) ? parsed.workers : [];
     return new Map(workers
-      .map((worker) => [safeString(worker?.worker).trim(), Number.isFinite(worker?.turn_count) ? Number(worker.turn_count) : null])
-      .filter(([workerName]) => workerName.length > 0));
+      .map((worker: WorkerProgressSnapshot) => [safeString(worker?.worker).trim(), Number.isFinite(worker?.turn_count) ? Number(worker.turn_count) : null] as const)
+      .filter((entry: readonly [string, number | null]) => entry[0].length > 0));
   } catch {
     return new Map();
   }
 }
 
-function hasWorkerTurnProgress(workerSnapshot, previousTurnCounts) {
+function hasWorkerTurnProgress(workerSnapshot: WorkerProgressSnapshot[], previousTurnCounts: Map<string, number | null>) {
   return workerSnapshot.some((worker) => {
     if (worker.state !== 'working' && worker.state !== 'blocked') return false;
     if (!Number.isFinite(worker.turn_count) || worker.turn_count === null) return false;
     const previousTurnCount = previousTurnCounts.get(worker.worker);
-    return Number.isFinite(previousTurnCount) && previousTurnCount !== null && worker.turn_count > previousTurnCount;
+    return previousTurnCount !== undefined && previousTurnCount !== null && Number.isFinite(previousTurnCount) && worker.turn_count > previousTurnCount;
   });
 }
 
-function hasTrackableActiveWorkerTurns(workerSnapshot, previousTurnCounts) {
+function hasTrackableActiveWorkerTurns(workerSnapshot: WorkerProgressSnapshot[], previousTurnCounts: Map<string, number | null>) {
   return workerSnapshot.some((worker) => {
     if (worker.state !== 'working' && worker.state !== 'blocked') return false;
     if (!Number.isFinite(worker.turn_count) || worker.turn_count === null) return false;
     const previousTurnCount = previousTurnCounts.get(worker.worker);
-    return Number.isFinite(previousTurnCount) && previousTurnCount !== null;
+    return previousTurnCount !== undefined && previousTurnCount !== null && Number.isFinite(previousTurnCount);
   });
 }
 
-function formatDurationMs(durationMs) {
+function formatDurationMs(durationMs: number) {
   const seconds = Math.max(1, Math.round(durationMs / 1000));
   if (seconds < 60) return `${seconds}s`;
   if (seconds % 60 === 0) return `${seconds / 60}m`;
@@ -404,15 +515,15 @@ function formatDurationMs(durationMs) {
   return `${minutes}m${remainingSeconds}s`;
 }
 
-function normalizeMailboxMessages(rawMailbox) {
-  if (Array.isArray(rawMailbox)) return rawMailbox;
-  if (rawMailbox && typeof rawMailbox === 'object' && Array.isArray(rawMailbox.messages)) {
-    return rawMailbox.messages;
+function normalizeMailboxMessages(rawMailbox: unknown): MailboxMessage[] {
+  if (Array.isArray(rawMailbox)) return rawMailbox as MailboxMessage[];
+  if (rawMailbox && typeof rawMailbox === 'object' && Array.isArray((rawMailbox as { messages?: unknown[] }).messages)) {
+    return (rawMailbox as { messages: MailboxMessage[] }).messages;
   }
   return [];
 }
 
-function normalizeMessageIdentity(msg) {
+function normalizeMessageIdentity(msg: MailboxMessage | null): string {
   if (!msg || typeof msg !== 'object') return '';
   const explicitId = safeString(msg.message_id || '').trim();
   if (explicitId) return explicitId;
@@ -422,24 +533,24 @@ function normalizeMessageIdentity(msg) {
   return [createdAt, from, body].filter(Boolean).join('|');
 }
 
-function normalizeMailboxBody(body) {
+function normalizeMailboxBody(body: unknown): string {
   return safeString(body).replace(/\s+/g, ' ').trim();
 }
 
-function isAckLikeMailboxBody(body) {
+function isAckLikeMailboxBody(body: unknown): boolean {
   const normalized = normalizeMailboxBody(body);
   if (!normalized) return false;
   return ACK_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-function formatMailboxBodyForLeader(body, maxLength = 40) {
+function formatMailboxBodyForLeader(body: unknown, maxLength = 40): string {
   const normalized = normalizeMailboxBody(body);
   if (!normalized) return 'ack-like update';
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
-async function workerHasOwnedStartedTask(stateDir, teamName, workerName) {
+async function workerHasOwnedStartedTask(stateDir: string, teamName: string, workerName: string) {
   const tasksDir = join(stateDir, 'team', teamName, 'tasks');
   if (!existsSync(tasksDir)) return false;
 
@@ -464,7 +575,7 @@ async function workerHasOwnedStartedTask(stateDir, teamName, workerName) {
   return false;
 }
 
-async function getAckWithoutStartEvidence(stateDir, teamName, msg) {
+async function getAckWithoutStartEvidence(stateDir: string, teamName: string, msg: MailboxMessage | null) {
   if (!msg || typeof msg !== 'object') return null;
   const fromWorker = safeString(msg.from_worker || '').trim();
   if (!fromWorker || fromWorker === 'leader-fixed') return null;
@@ -492,7 +603,7 @@ async function getAckWithoutStartEvidence(stateDir, teamName, msg) {
   };
 }
 
-export async function emitTeamNudgeEvent(cwd, teamName, reason, nowIso) {
+export async function emitTeamNudgeEvent(cwd: string, teamName: string, reason: string, nowIso: string) {
   const eventsDir = join(cwd, '.omx', 'state', 'team', teamName, 'events');
   const eventsPath = join(eventsDir, 'events.ndjson');
   try {
@@ -511,7 +622,13 @@ export async function emitTeamNudgeEvent(cwd, teamName, reason, nowIso) {
   }
 }
 
-async function emitLeaderNudgeDeferredEvent(cwd, teamName, reason, nowIso, { tmuxSession = '', leaderPaneId = '', paneCurrentCommand = '', sourceType = 'leader_nudge' } = {}) {
+async function emitLeaderNudgeDeferredEvent(
+  cwd: string,
+  teamName: string,
+  reason: string,
+  nowIso: string,
+  { tmuxSession = '', leaderPaneId = '', paneCurrentCommand = '', sourceType = 'leader_nudge' }: { tmuxSession?: string; leaderPaneId?: string; paneCurrentCommand?: string; sourceType?: string } = {},
+) {
   const eventsDir = join(cwd, '.omx', 'state', 'team', teamName, 'events');
   const eventsPath = join(eventsDir, 'events.ndjson');
   try {
@@ -536,7 +653,7 @@ async function emitLeaderNudgeDeferredEvent(cwd, teamName, reason, nowIso, { tmu
   }
 }
 
-export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale }) {
+export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale }: MaybeNudgeTeamLeaderArgs) {
   const intervalMs = resolveLeaderNudgeIntervalMs();
   const idleCooldownMs = resolveLeaderAllIdleNudgeCooldownMs();
   const fallbackProgressStallThresholdMs = resolveFallbackProgressStallThresholdMs();
@@ -546,10 +663,11 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
   const omxDir = join(cwd, '.omx');
   const nudgeStatePath = join(stateDir, 'team-leader-nudge.json');
 
-  let nudgeState = await readJsonIfExists(nudgeStatePath, null);
-  if (!nudgeState || typeof nudgeState !== 'object') {
-    nudgeState = { last_nudged_by_team: {} };
-  }
+  let nudgeState: NudgeState = (await readJsonIfExists(nudgeStatePath, null) as NudgeState | null) || {
+    last_nudged_by_team: {},
+    last_idle_nudged_by_team: {},
+    progress_by_team: {},
+  };
   if (!nudgeState.last_nudged_by_team || typeof nudgeState.last_nudged_by_team !== 'object') {
     nudgeState.last_nudged_by_team = {};
   }
@@ -560,7 +678,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
     nudgeState.progress_by_team = {};
   }
 
-  const candidateTeamNames = new Set();
+  const candidateTeamNames = new Set<string>();
   const currentSessionId = await resolveCurrentSessionId(stateDir);
   try {
     const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
@@ -593,7 +711,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
     let tmuxSession = '';
     let leaderPaneId = '';
     let ownerSessionId = '';
-    let workers = [];
+    let workers: TeamWorkerConfig[] = [];
     try {
       const manifestPath = join(omxDir, 'state', 'team', teamName, 'manifest.v2.json');
       const configPath = join(omxDir, 'state', 'team', teamName, 'config.json');
@@ -609,7 +727,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
       // ignore
     }
     if (currentSessionId && ownerSessionId && ownerSessionId !== currentSessionId) continue;
-    let mailbox = null;
+    let mailbox: { messages?: MailboxMessage[] } | MailboxMessage[] | null = null;
     try {
       const mailboxPath = join(omxDir, 'state', 'team', teamName, 'mailbox', 'leader-fixed.json');
       mailbox = await readJsonIfExists(mailboxPath, null);
@@ -972,7 +1090,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
         reason: nudgeReason,
         result: 'sent',
       });
-    } catch (err) {
+    } catch (err: unknown) {
       try {
         await logTmuxHookEvent(logsDir, {
           timestamp: nowIso,
@@ -980,7 +1098,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
           team: teamName,
           tmux_target: tmuxTarget,
           reason: nudgeReason,
-          error: safeString(err && err.message ? err.message : err),
+          error: errorMessage(err),
         });
       } catch { /* ignore */ }
       await decisionTrace(cwd, 'leader_nudge.decision', {
@@ -989,7 +1107,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
         pane_target: tmuxTarget,
         session_name: tmuxSession,
         reason: nudgeReason,
-        error: safeString(err && err.message ? err.message : err),
+        error: errorMessage(err),
         result: 'error',
       });
     }

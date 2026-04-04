@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Auto-nudge: detect Codex "asking for permission" stall patterns and
  * automatically send a continuation prompt so the agent keeps working.
@@ -27,27 +26,95 @@ const DEEP_INTERVIEW_BLOCKED_APPROVAL_PREFIXES = new Set(['next i should']);
 const SKILL_PHASES = new Set(['planning', 'executing', 'reviewing', 'completing']);
 const DEFAULT_AUTO_NUDGE_TTL_MS = 30_000;
 
-function normalizeSkillPhase(phase) {
+type JsonMap = Record<string, unknown>;
+
+interface InputLockState {
+  active: boolean;
+  scope: string;
+  acquired_at: string;
+  released_at: string;
+  blocked_inputs: string[];
+  message: string;
+  exit_reason: string;
+}
+
+interface SkillActiveState {
+  version: number;
+  active: boolean;
+  skill: string;
+  keyword: string;
+  phase: string;
+  activated_at: string;
+  updated_at: string;
+  source: string;
+  input_lock: InputLockState | null;
+}
+
+interface AutoNudgeConfig {
+  enabled: boolean;
+  patterns: string[];
+  response: string;
+  delaySec: number;
+  stallMs: number;
+  ttlMs: number;
+}
+
+interface SkillReleaseContext {
+  skillState: SkillActiveState | null;
+  latestUserInput?: string;
+  lastMessage?: string;
+}
+
+interface AutoNudgeArgs {
+  cwd: string;
+  stateDir: string;
+  logsDir: string;
+  payload: JsonMap;
+}
+
+interface HudState {
+  active?: boolean;
+  last_turn_at?: string;
+  turn_count?: number;
+  last_agent_output?: string;
+  last_agent_message?: string;
+}
+
+interface AutoNudgeConfigFile {
+  autoNudge?: unknown;
+}
+
+interface AutoNudgeState {
+  nudgeCount: number;
+  lastNudgeAt: string;
+  lastSignature: string;
+  lastSemanticSignature: string;
+  pendingSignature?: string;
+  pendingSince?: string;
+}
+
+function normalizeSkillPhase(phase: unknown): string {
   const normalized = safeString(phase).toLowerCase().trim();
   return SKILL_PHASES.has(normalized) ? normalized : 'planning';
 }
 
-function normalizeInputLock(raw) {
+function normalizeInputLock(raw: unknown): InputLockState | null {
   if (!raw || typeof raw !== 'object') return null;
+  const record = raw as JsonMap;
   return {
-    active: raw.active !== false,
-    scope: safeString(raw.scope),
-    acquired_at: safeString(raw.acquired_at),
-    released_at: safeString(raw.released_at),
-    blocked_inputs: Array.isArray(raw.blocked_inputs)
-      ? raw.blocked_inputs.map((value) => safeString(value).toLowerCase()).filter(Boolean)
+    active: record.active !== false,
+    scope: safeString(record.scope),
+    acquired_at: safeString(record.acquired_at),
+    released_at: safeString(record.released_at),
+    blocked_inputs: Array.isArray(record.blocked_inputs)
+      ? record.blocked_inputs.map((value) => safeString(value).toLowerCase()).filter(Boolean)
       : [...DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS],
-    message: safeString(raw.message) || DEEP_INTERVIEW_INPUT_LOCK_MESSAGE,
-    exit_reason: safeString(raw.exit_reason),
+    message: safeString(record.message) || DEEP_INTERVIEW_INPUT_LOCK_MESSAGE,
+    exit_reason: safeString(record.exit_reason),
   };
 }
 
-export function normalizeBlockedAutoApprovalInput(text) {
+export function normalizeBlockedAutoApprovalInput(text: unknown): string {
   return safeString(text)
     .toLowerCase()
     .replace(/\[omx_tmux_inject\]/gi, '')
@@ -55,7 +122,7 @@ export function normalizeBlockedAutoApprovalInput(text) {
     .trim();
 }
 
-export function isBlockedAutoApprovalInput(text, blockedInputs = DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS) {
+export function isBlockedAutoApprovalInput(text: unknown, blockedInputs: string[] = DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS): boolean {
   const normalized = normalizeBlockedAutoApprovalInput(text);
   if (!normalized) return false;
   if (blockedInputs.some((entry) => normalizeBlockedAutoApprovalInput(entry) === normalized)) return true;
@@ -75,16 +142,16 @@ export function isBlockedAutoApprovalInput(text, blockedInputs = DEEP_INTERVIEW_
   return tokens.every((token) => blockedTokenSet.has(token));
 }
 
-function isDeepInterviewAbortInput(text) {
+function isDeepInterviewAbortInput(text: unknown): boolean {
   return DEEP_INTERVIEW_ABORT_INPUTS.has(normalizeBlockedAutoApprovalInput(text));
 }
 
-function hasAnySubstring(text, patterns) {
+function hasAnySubstring(text: unknown, patterns: string[]): boolean {
   const lower = safeString(text).toLowerCase();
   return patterns.some((pattern) => lower.includes(pattern));
 }
 
-export function isDeepInterviewAutoApprovalLocked(skillState) {
+export function isDeepInterviewAutoApprovalLocked(skillState: SkillActiveState | null): boolean {
   return Boolean(
     skillState
     && skillState.skill === 'deep-interview'
@@ -94,7 +161,7 @@ export function isDeepInterviewAutoApprovalLocked(skillState) {
   );
 }
 
-export function inferDeepInterviewReleaseReason({ skillState, latestUserInput = '', lastMessage = '' }) {
+export function inferDeepInterviewReleaseReason({ skillState, latestUserInput = '', lastMessage = '' }: SkillReleaseContext) {
   if (!isDeepInterviewAutoApprovalLocked(skillState)) {
     return null;
   }
@@ -104,13 +171,13 @@ export function inferDeepInterviewReleaseReason({ skillState, latestUserInput = 
   if (hasAnySubstring(` ${safeString(lastMessage).toLowerCase()}`, DEEP_INTERVIEW_ERROR_PATTERNS)) {
     return 'error';
   }
-  if (skillState.phase === 'completing') {
+  if (skillState?.phase === 'completing') {
     return 'success';
   }
   return null;
 }
 
-function releaseDeepInterviewInputLock(skillState, reason, nowIso) {
+function releaseDeepInterviewInputLock(skillState: SkillActiveState, reason: string, nowIso: string): SkillActiveState {
   if (!skillState?.input_lock) return skillState;
   skillState.input_lock = {
     ...skillState.input_lock,
@@ -124,30 +191,31 @@ function releaseDeepInterviewInputLock(skillState, reason, nowIso) {
   return skillState;
 }
 
-export function normalizeSkillActiveState(raw) {
+export function normalizeSkillActiveState(raw: unknown): SkillActiveState | null {
   if (!raw || typeof raw !== 'object') {
     return null;
   }
-  const skill = safeString(raw.skill);
+  const record = raw as JsonMap;
+  const skill = safeString(record.skill);
   if (!skill) return null;
   return {
-    version: asNumber(raw.version) ?? 1,
-    active: raw.active !== false,
+    version: asNumber(record.version) ?? 1,
+    active: record.active !== false,
     skill,
-    keyword: safeString(raw.keyword),
-    phase: normalizeSkillPhase(raw.phase),
-    activated_at: safeString(raw.activated_at),
-    updated_at: safeString(raw.updated_at),
-    source: safeString(raw.source),
-    input_lock: normalizeInputLock(raw.input_lock),
+    keyword: safeString(record.keyword),
+    phase: normalizeSkillPhase(record.phase),
+    activated_at: safeString(record.activated_at),
+    updated_at: safeString(record.updated_at),
+    source: safeString(record.source),
+    input_lock: normalizeInputLock(record.input_lock),
   };
 }
 
-export function inferSkillPhaseFromText(text, currentPhase = 'planning') {
+export function inferSkillPhaseFromText(text: unknown, currentPhase = 'planning') {
   const lower = safeString(text).toLowerCase();
   if (!lower) return normalizeSkillPhase(currentPhase);
 
-  const hasAny = (patterns) => patterns.some((p) => lower.includes(p));
+  const hasAny = (patterns: string[]) => patterns.some((p: string) => lower.includes(p));
 
   if (hasAny(['all tests pass', 'build succeeded', 'completed', 'complete', 'done', 'final summary', 'summary'])) {
     return 'completing';
@@ -164,26 +232,27 @@ export function inferSkillPhaseFromText(text, currentPhase = 'planning') {
   return normalizeSkillPhase(currentPhase);
 }
 
-async function loadSkillActiveState(stateDir) {
+async function loadSkillActiveState(stateDir: string): Promise<SkillActiveState | null> {
   const raw = await readJsonIfExists(join(stateDir, SKILL_ACTIVE_STATE_FILE), null);
   return normalizeSkillActiveState(raw);
 }
 
-async function persistSkillActiveState(stateDir, state) {
+async function persistSkillActiveState(stateDir: string, state: SkillActiveState) {
   await writeFile(join(stateDir, SKILL_ACTIVE_STATE_FILE), JSON.stringify(state, null, 2)).catch(() => {});
 }
 
 
-export async function isDeepInterviewStateActive(stateDir) {
-  const modeState = await readJsonIfExists(join(stateDir, 'deep-interview-state.json'), null);
+export async function isDeepInterviewStateActive(stateDir: string) {
+  const modeState = await readJsonIfExists<Record<string, unknown> | null>(join(stateDir, 'deep-interview-state.json'), null);
   return Boolean(modeState && modeState.active === true);
 }
 
-export async function resolveAutoNudgeSignature(stateDir, payload, lastMessage = '') {
+export async function resolveAutoNudgeSignature(stateDir: string, payload: JsonMap, lastMessage = '') {
   const normalizedMessage = normalizeAutoNudgeSignatureText(lastMessage);
-  const hudState = await readJsonIfExists(join(stateDir, 'hud-state.json'), null);
+  const hudState = await readJsonIfExists<HudState | null>(join(stateDir, 'hud-state.json'), null);
   const hudTurnAt = safeString(hudState?.last_turn_at).trim();
-  const hudTurnCount = Number.isFinite(hudState?.turn_count) ? hudState.turn_count : null;
+  const hudTurnCountRaw = hudState?.turn_count;
+  const hudTurnCount = Number.isFinite(hudTurnCountRaw) ? hudTurnCountRaw : null;
   const hudMessage = normalizeAutoNudgeSignatureText(hudState?.last_agent_output || hudState?.last_agent_message || '');
 
   if (normalizedMessage && hudTurnAt && hudTurnCount !== null && hudMessage === normalizedMessage) {
@@ -199,7 +268,7 @@ export async function resolveAutoNudgeSignature(stateDir, payload, lastMessage =
   return normalizedMessage ? `message:${normalizedMessage}` : '';
 }
 
-function latestUserInputFromPayload(payload) {
+function latestUserInputFromPayload(payload: JsonMap) {
   const inputMessages = payload['input-messages'] || payload.input_messages || [];
   if (!Array.isArray(inputMessages) || inputMessages.length === 0) return '';
   return safeString(inputMessages[inputMessages.length - 1]);
@@ -270,7 +339,7 @@ const SEMANTIC_STALL_PROMPT_PATTERNS = [
   /\bi'?ll continue from\b/g,
 ];
 
-function normalizeStallDetectionText(text) {
+function normalizeStallDetectionText(text: unknown) {
   return safeString(text)
     .replace(/\r\n?/g, '\n')
     .split('\n')
@@ -280,7 +349,7 @@ function normalizeStallDetectionText(text) {
     .replace(/[’‘`]/g, '\'');
 }
 
-export function normalizeAutoNudgeSignatureText(text) {
+export function normalizeAutoNudgeSignatureText(text: unknown) {
   const normalized = normalizeStallDetectionText(text)
     .replace(/[^\w\s']/g, ' ')
     .replace(/\s+/g, ' ')
@@ -303,7 +372,7 @@ export function normalizeAutoNudgeSignatureText(text) {
   return normalized;
 }
 
-function summarizePaneCaptureForLog(captured, maxLines = 6) {
+function summarizePaneCaptureForLog(captured: unknown, maxLines = 6) {
   const lines = safeString(captured)
     .replace(/\r\n?/g, '\n')
     .split('\n')
@@ -313,7 +382,7 @@ function summarizePaneCaptureForLog(captured, maxLines = 6) {
   return lines.slice(-maxLines).join('\n').slice(0, 600);
 }
 
-export function normalizeAutoNudgeConfig(raw) {
+export function normalizeAutoNudgeConfig(raw: unknown): AutoNudgeConfig {
   if (!raw || typeof raw !== 'object') {
     return {
       enabled: true,
@@ -324,24 +393,25 @@ export function normalizeAutoNudgeConfig(raw) {
       ttlMs: DEFAULT_AUTO_NUDGE_TTL_MS,
     };
   }
+  const record = raw as JsonMap;
   return {
-    enabled: raw.enabled !== false,
-    patterns: Array.isArray(raw.patterns) && raw.patterns.length > 0
-      ? raw.patterns.filter(p => typeof p === 'string' && p.trim() !== '')
+    enabled: record.enabled !== false,
+    patterns: Array.isArray(record.patterns) && record.patterns.length > 0
+      ? record.patterns.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
       : DEFAULT_STALL_PATTERNS,
-    response: typeof raw.response === 'string' && raw.response.trim() !== ''
-      ? raw.response
+    response: typeof record.response === 'string' && record.response.trim() !== ''
+      ? record.response
       : 'yes, proceed',
-    delaySec: typeof raw.delaySec === 'number' && raw.delaySec >= 0 && raw.delaySec <= 60
-      ? raw.delaySec
+    delaySec: typeof record.delaySec === 'number' && record.delaySec >= 0 && record.delaySec <= 60
+      ? record.delaySec
       : 3,
-    stallMs: typeof raw.stallMs === 'number' && raw.stallMs >= 0 && raw.stallMs <= 60_000
-      ? raw.stallMs
+    stallMs: typeof record.stallMs === 'number' && record.stallMs >= 0 && record.stallMs <= 60_000
+      ? record.stallMs
       : 5000,
-    ttlMs: typeof raw.ttlMs === 'number' && raw.ttlMs >= 0 && raw.ttlMs <= 10 * 60_000
-      ? raw.ttlMs
-      : (typeof raw.cooldownMs === 'number' && raw.cooldownMs >= 0 && raw.cooldownMs <= 10 * 60_000
-        ? raw.cooldownMs
+    ttlMs: typeof record.ttlMs === 'number' && record.ttlMs >= 0 && record.ttlMs <= 10 * 60_000
+      ? record.ttlMs
+      : (typeof record.cooldownMs === 'number' && record.cooldownMs >= 0 && record.cooldownMs <= 10 * 60_000
+        ? record.cooldownMs
         : DEFAULT_AUTO_NUDGE_TTL_MS),
   };
 }
@@ -349,12 +419,12 @@ export function normalizeAutoNudgeConfig(raw) {
 export async function loadAutoNudgeConfig() {
   const codexHomePath = process.env.CODEX_HOME || join(homedir(), '.codex');
   const configPath = join(codexHomePath, '.omx-config.json');
-  const raw = await readJsonIfExists(configPath, null);
+  const raw = await readJsonIfExists<AutoNudgeConfigFile | null>(configPath, null);
   if (!raw || typeof raw !== 'object') return normalizeAutoNudgeConfig(null);
   return normalizeAutoNudgeConfig(raw.autoNudge);
 }
 
-export function detectStallPattern(text, patterns) {
+export function detectStallPattern(text: unknown, patterns: string[]) {
   if (!text || typeof text !== 'string') return false;
   const normalized = normalizeStallDetectionText(text);
   if (!normalized) return false;
@@ -362,11 +432,11 @@ export function detectStallPattern(text, patterns) {
   const normalizedPatterns = patterns.map((pattern) => normalizeStallDetectionText(pattern)).filter(Boolean);
   const lines = tail.split('\n').filter((line) => line.trim());
   const hotZone = lines.slice(-3).join('\n');
-  if (normalizedPatterns.some((pattern) => hotZone.includes(pattern))) return true;
-  return normalizedPatterns.some((pattern) => tail.includes(pattern));
+  if (normalizedPatterns.some((pattern: string) => hotZone.includes(pattern))) return true;
+  return normalizedPatterns.some((pattern: string) => tail.includes(pattern));
 }
 
-export async function capturePane(paneId, lines = 10) {
+export async function capturePane(paneId: string, lines = 10) {
   try {
     const result = await runProcess('tmux', buildCapturePaneArgv(paneId, lines), 3000);
     return result.stdout || '';
@@ -375,7 +445,7 @@ export async function capturePane(paneId, lines = 10) {
   }
 }
 
-function resolveCodexPaneByCwdFallback(cwd) {
+function resolveCodexPaneByCwdFallback(cwd: string) {
   const normalizedCwd = safeString(cwd).trim();
   if (!normalizedCwd) return '';
 
@@ -404,7 +474,7 @@ function resolveCodexPaneByCwdFallback(cwd) {
   return '';
 }
 
-async function resolveCodexPaneFromAnchor(anchorPane) {
+async function resolveCodexPaneFromAnchor(anchorPane: string) {
   const paneId = safeString(anchorPane).trim();
   if (!paneId) return '';
 
@@ -433,7 +503,7 @@ async function resolveCodexPaneFromAnchor(anchorPane) {
   return '';
 }
 
-function resolveInvocationSessionId(payload) {
+function resolveInvocationSessionId(payload: JsonMap) {
   return safeString(
     payload?.session_id
     || payload?.['session-id']
@@ -445,7 +515,7 @@ function resolveInvocationSessionId(payload) {
 }
 
 
-function sanitizeTmuxToken(value) {
+function sanitizeTmuxToken(value: unknown) {
   const cleaned = safeString(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -453,7 +523,7 @@ function sanitizeTmuxToken(value) {
   return cleaned || 'unknown';
 }
 
-function buildExpectedManagedTmuxSessionName(cwd, sessionId) {
+function buildExpectedManagedTmuxSessionName(cwd: string, sessionId: string) {
   const parentPath = dirname(cwd);
   const parentDir = basename(parentPath);
   const dirName = basename(cwd);
@@ -497,11 +567,12 @@ function readCurrentTmuxSessionName() {
   }
 }
 
-function readParentPid(pid) {
-  if (!Number.isInteger(pid) || pid <= 1) return null;
+function readParentPid(pid: unknown) {
+  const normalizedPid = Number(pid);
+  if (!Number.isInteger(normalizedPid) || normalizedPid <= 1) return null;
   try {
     if (process.platform === 'linux') {
-      const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+      const stat = readFileSync(`/proc/${normalizedPid}/stat`, 'utf-8');
       const commandEnd = stat.lastIndexOf(')');
       if (commandEnd === -1) return null;
       const remainder = stat.slice(commandEnd + 1).trim();
@@ -510,7 +581,7 @@ function readParentPid(pid) {
       const ppid = Number(fields[1]);
       return Number.isFinite(ppid) && ppid > 0 ? ppid : null;
     }
-    const raw = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], {
+    const raw = execFileSync('ps', ['-o', 'ppid=', '-p', String(normalizedPid)], {
       encoding: 'utf-8',
       timeout: 2000,
     }).trim();
@@ -521,11 +592,12 @@ function readParentPid(pid) {
   }
 }
 
-function processHasAncestorPid(targetPid, currentPid = process.pid) {
-  if (!Number.isInteger(targetPid) || targetPid <= 1) return false;
+function processHasAncestorPid(targetPid: unknown, currentPid = process.pid) {
+  const normalizedTargetPid = Number(targetPid);
+  if (!Number.isInteger(normalizedTargetPid) || normalizedTargetPid <= 1) return false;
   let pid = Number.isInteger(currentPid) && currentPid > 1 ? currentPid : process.pid;
   for (let depth = 0; depth < 64 && pid > 1; depth += 1) {
-    if (pid === targetPid) return true;
+    if (pid === normalizedTargetPid) return true;
     const parent = readParentPid(pid);
     if (!parent || parent === pid) break;
     pid = parent;
@@ -533,7 +605,7 @@ function processHasAncestorPid(targetPid, currentPid = process.pid) {
   return false;
 }
 
-async function isManagedOmxSessionForAutoNudge(cwd, payload) {
+async function isManagedOmxSessionForAutoNudge(cwd: string, payload: JsonMap) {
   if (safeString(process.env.OMX_TEAM_WORKER || '').trim() !== '') return true;
 
   const invocationSessionId = resolveInvocationSessionId(payload);
@@ -573,7 +645,7 @@ async function isManagedOmxSessionForAutoNudge(cwd, payload) {
   }
 }
 
-export async function resolveNudgePaneTarget(stateDir: any, cwd = '') {
+export async function resolveNudgePaneTarget(stateDir: string, cwd = '') {
   let fallbackPane = '';
 
   try {
@@ -619,7 +691,7 @@ export async function resolveNudgePaneTarget(stateDir: any, cwd = '') {
   return resolveCodexPaneByCwdFallback(cwd);
 }
 
-export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
+export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }: AutoNudgeArgs) {
   const config = await loadAutoNudgeConfig();
   if (!config.enabled) return;
 
@@ -649,10 +721,12 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     }
 
     const nudgeStatePath = join(stateDir, 'auto-nudge-state.json');
-    let nudgeState = await readJsonIfExists(nudgeStatePath, null);
-    if (!nudgeState || typeof nudgeState !== 'object') {
-      nudgeState = { nudgeCount: 0, lastNudgeAt: '', lastSignature: '', lastSemanticSignature: '' };
-    }
+    let nudgeState: AutoNudgeState = await readJsonIfExists<AutoNudgeState | null>(nudgeStatePath, null) ?? {
+      nudgeCount: 0,
+      lastNudgeAt: '',
+      lastSignature: '',
+      lastSemanticSignature: '',
+    };
     const paneId = await resolveNudgePaneTarget(stateDir, cwd);
 
     let detected = detectStallPattern(lastMessage, config.patterns);
@@ -735,9 +809,9 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
       return;
     }
 
-    const deepInterviewLockActive = isDeepInterviewAutoApprovalLocked(skillState) && !releaseReason;
-    if (deepInterviewLockActive && isBlockedAutoApprovalInput(config.response, skillState.input_lock?.blocked_inputs)) {
-      const blockedMessage = skillState.input_lock?.message || DEEP_INTERVIEW_INPUT_LOCK_MESSAGE;
+    const deepInterviewLockActive = Boolean(skillState) && isDeepInterviewAutoApprovalLocked(skillState) && !releaseReason;
+    if (deepInterviewLockActive && isBlockedAutoApprovalInput(config.response, skillState?.input_lock?.blocked_inputs)) {
+      const blockedMessage = skillState?.input_lock?.message || DEEP_INTERVIEW_INPUT_LOCK_MESSAGE;
       await logTmuxHookEvent(logsDir, {
         timestamp: new Date().toISOString(),
         type: 'auto_nudge_blocked',

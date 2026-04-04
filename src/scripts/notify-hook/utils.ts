@@ -3,7 +3,7 @@
  * No I/O, no side effects.
  */
 
-export function asNumber(value: any): number | null {
+export function asNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim() !== '') {
     const parsed = Number(value);
@@ -12,20 +12,21 @@ export function asNumber(value: any): number | null {
   return null;
 }
 
-export function safeString(value: any, fallback = ''): string {
+export function safeString(value: unknown, fallback = ''): string {
   if (typeof value === 'string') return value;
   if (value == null) return fallback;
   return String(value);
 }
 
-export function clampPct(value: any): number | null {
-  if (!Number.isFinite(value)) return null;
-  if (value < 0) return 0;
-  if (value <= 1) return Math.round(value * 100);
-  if (value > 100) return 100;
-  return Math.round(value);
+export function clampPct(value: unknown): number | null {
+  const normalizedValue = Number(value);
+  if (!Number.isFinite(normalizedValue)) return null;
+  if (normalizedValue < 0) return 0;
+  if (normalizedValue <= 1) return Math.round(normalizedValue * 100);
+  if (normalizedValue > 100) return 100;
+  return Math.round(normalizedValue);
 }
 
-export function isTerminalPhase(phase: any): boolean {
+export function isTerminalPhase(phase: unknown): boolean {
   return phase === 'complete' || phase === 'failed' || phase === 'cancelled';
 }

@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'fs/promises';
@@ -52,6 +53,8 @@ import {
 import { HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES } from '../../hud/constants.js';
 import * as tmuxSessionModule from '../tmux-session.js';
 
+type SpawnSyncLike = typeof import('node:child_process').spawnSync;
+
 function withEmptyPath<T>(fn: () => T): T {
   const prev = process.env.PATH;
   process.env.PATH = '';
@@ -77,6 +80,19 @@ function withMockedExistsSync<T>(mock: typeof fs.existsSync, fn: () => T): T {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function spawnSyncResult(overrides: Partial<SpawnSyncReturns<string>>): SpawnSyncReturns<string> {
+  return {
+    status: 0,
+    stdout: '',
+    stderr: '',
+    error: undefined,
+    output: [],
+    pid: 0,
+    signal: null,
+    ...overrides,
+  };
 }
 
 const CLAUDE_BYPASS_PROMPT_CAPTURE = `Bypass Permissions mode
@@ -128,6 +144,10 @@ async function withMockTmuxFixture<T>(
     else delete process.env.PATH;
     await rm(fakeBinDir, { recursive: true, force: true });
   }
+}
+
+function buildSpawnSyncMock(result: SpawnSyncReturns<string>): SpawnSyncLike {
+  return ((..._args: Parameters<SpawnSyncLike>) => result) as SpawnSyncLike;
 }
 
 describe('sanitizeTeamName', () => {
@@ -1738,7 +1758,7 @@ describe('translatePathForMsys', () => {
       'C:\\repo\\AGENTS.md',
       { MSYSTEM: 'MINGW64' },
       'win32',
-      () => ({ status: 0, stdout: '/c/repo/AGENTS.md\n', stderr: '', error: undefined, output: [] as string[] }) as any,
+      buildSpawnSyncMock(spawnSyncResult({ status: 0, stdout: '/c/repo/AGENTS.md\n' })),
     );
     assert.equal(translated, '/c/repo/AGENTS.md');
   });
@@ -1748,7 +1768,7 @@ describe('translatePathForMsys', () => {
       'C:\\repo\\AGENTS.md',
       { MSYSTEM: 'MINGW64' },
       'win32',
-      () => ({ status: 1, stdout: '', stderr: 'not found', error: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }), output: [] as string[] }) as any,
+      buildSpawnSyncMock(spawnSyncResult({ status: 1, stderr: 'not found', error: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })),
     );
     assert.equal(translated, '/c/repo/AGENTS.md');
   });

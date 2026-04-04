@@ -4,6 +4,9 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import type { SpawnSyncReturns } from 'node:child_process';
+
+type SpawnSyncLike = typeof import('node:child_process').spawnSync;
 
 // We test the pure state helpers by monkey-patching homedir via dynamic import
 // of the module. Since ESM modules are cached, we test the exported helpers
@@ -99,20 +102,28 @@ describe('star-prompt state path', () => {
 describe('starRepo', () => {
   it('returns ok when gh api exits successfully', async () => {
     const { starRepo } = await import('../star-prompt.js');
-    assert.deepEqual(starRepo((() => ({
+    const spawnSyncOk = ((..._args: Parameters<SpawnSyncLike>) => ({
       status: 0,
       stdout: '',
       stderr: '',
-    })) as any), { ok: true });
+      output: [],
+      pid: 0,
+      signal: null,
+    }) as SpawnSyncReturns<string>) as SpawnSyncLike;
+    assert.deepEqual(starRepo(spawnSyncOk), { ok: true });
   });
 
   it('returns error details when gh api exits non-zero', async () => {
     const { starRepo } = await import('../star-prompt.js');
-    const result = starRepo((() => ({
+    const spawnSyncFailure = ((..._args: Parameters<SpawnSyncLike>) => ({
       status: 1,
       stdout: '',
       stderr: 'authentication failed',
-    })) as any);
+      output: [],
+      pid: 0,
+      signal: null,
+    }) as SpawnSyncReturns<string>) as SpawnSyncLike;
+    const result = starRepo(spawnSyncFailure);
     assert.equal(result.ok, false);
     if (!result.ok) {
       assert.equal(result.error, 'authentication failed');
@@ -121,12 +132,16 @@ describe('starRepo', () => {
 
   it('returns spawn error when command fails to launch', async () => {
     const { starRepo } = await import('../star-prompt.js');
-    const result = starRepo((() => ({
+    const spawnSyncLaunchFailure = ((..._args: Parameters<SpawnSyncLike>) => ({
       status: null,
       stdout: '',
       stderr: '',
       error: new Error('spawn ENOENT'),
-    })) as any);
+      output: [],
+      pid: 0,
+      signal: null,
+    }) as SpawnSyncReturns<string>) as SpawnSyncLike;
+    const result = starRepo(spawnSyncLaunchFailure);
     assert.equal(result.ok, false);
     if (!result.ok) {
       assert.match(result.error, /ENOENT/);

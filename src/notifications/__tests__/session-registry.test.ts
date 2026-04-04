@@ -61,8 +61,8 @@ describe('SessionMapping shape', () => {
     assert.equal(withPath.projectPath, '/test/path');
 
     const withoutPath = createMockMapping();
-    delete (withoutPath as any).projectPath;
-    const json = JSON.stringify(withoutPath);
+    const { projectPath: _projectPath, ...mappingWithoutPath } = withoutPath;
+    const json = JSON.stringify(mappingWithoutPath);
     const parsed = JSON.parse(json);
     assert.equal(parsed.projectPath, undefined);
   });

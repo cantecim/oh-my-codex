@@ -13,83 +13,20 @@ import {
   saveTeamConfig,
 } from '../../team/state.js';
 import { pathToFileURL } from 'node:url';
+import { dirname } from 'node:path';
+import { buildFakeTmuxScript } from '../../test-support/shared-harness.js';
 
 function buildFakeTmux(tmuxLogPath: string): string {
-  return `#!/usr/bin/env bash
-set -eu
-if [[ ! -f "${tmuxLogPath}" ]]; then : > "${tmuxLogPath}"; fi
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "capture-pane" ]]; then
-  if [[ -n "\${OMX_TEST_CAPTURE_SEQUENCE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" ]]; then
-    counterFile="\${OMX_TEST_CAPTURE_COUNTER_FILE:-\${OMX_TEST_CAPTURE_SEQUENCE_FILE}.idx}"
-    idx=0
-    if [[ -f "$counterFile" ]]; then idx="$(cat "$counterFile")"; fi
-    lineNo=$((idx + 1))
-    line="$(sed -n "\${lineNo}p" "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" || true)"
-    if [[ -z "$line" ]]; then
-      line="$(tail -n 1 "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" || true)"
-    fi
-    printf "%s\\n" "$line"
-    echo "$lineNo" > "$counterFile"
-    exit 0
-  fi
-  if [[ -n "\${OMX_TEST_CAPTURE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_FILE}" ]]; then
-    cat "\${OMX_TEST_CAPTURE_FILE}"
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  fmt=""
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      -t)
-        shift
-        target="$1"
-        ;;
-      *)
-        fmt="$1"
-        ;;
-    esac
-    shift || true
-  done
-  if [[ "$fmt" == "#{pane_in_mode}" ]]; then
-    echo "0"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_id}" ]]; then
-    echo "\${target:-%42}"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_path}" ]]; then
-    dirname "${tmuxLogPath}"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_start_command}" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_command}" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$fmt" == "#S" ]]; then
-    echo "session-test"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%42 1"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    listPaneLines: ['%42 1'],
+    defaultProbe: {
+      paneInMode: '0',
+      currentPath: dirname(tmuxLogPath),
+      currentCommand: 'codex',
+      startCommand: 'codex',
+      sessionName: 'session-test',
+    },
+  });
 }
 
 describe('notify-hook team dispatch consumer', { concurrency: false }, () => {

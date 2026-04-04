@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { execFileSync } from 'child_process';
@@ -9,8 +8,8 @@ import { resolveBridgeStateDir, resolveRuntimeBinaryPath } from '../../runtime/b
 import { buildRuntimeTraceId, traceDecision as appendRuntimeDecisionTrace } from '../../debug/runtime-trace.js';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-import { runProcess, runProcessWithTrace } from './process-runner.js';
+void dirname(__filename);
+import { runProcessWithTrace } from './process-runner.js';
 import { resolvePaneTarget } from './tmux-injection.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import {
@@ -20,6 +19,106 @@ import {
   paneLooksReady,
 } from '../tmux-hook-engine.js';
 
+interface DispatchRequest {
+  request_id: string;
+  kind: string;
+  team_name: string;
+  to_worker: string;
+  worker_index?: number;
+  pane_id?: string;
+  trigger_message: string;
+  message_id?: string;
+  inbox_correlation_key?: string;
+  transport_preference: string;
+  fallback_allowed: boolean;
+  status: string;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  notified_at?: string;
+  delivered_at?: string;
+  failed_at?: string;
+  last_reason?: string;
+}
+
+interface DispatchWorkerConfig {
+  index?: number;
+  pane_id?: string;
+  worker_cli?: string;
+}
+
+interface DispatchConfig {
+  leader_pane_id?: string;
+  tmux_session?: string;
+  workers?: DispatchWorkerConfig[];
+}
+
+interface TriggerCooldownEntry {
+  at: number;
+  lastRequestId: string;
+}
+
+interface InjectTarget {
+  type: 'pane' | 'session';
+  value: string;
+}
+
+interface InjectResult {
+  ok: boolean;
+  reason: string;
+  pane?: string;
+}
+
+interface LeaderDeferredEventArgs {
+  stateDir: string;
+  teamName: string;
+  request: DispatchRequest;
+  reason: string;
+  nowIso: string;
+  tmuxSession?: string;
+  leaderPaneId?: string;
+  sourceType?: string;
+}
+
+interface DrainPendingTeamDispatchOptions {
+  cwd?: string;
+  stateDir?: string;
+  logsDir?: string;
+  maxPerTick?: number;
+  injector?: (request: DispatchRequest, config: DispatchConfig, cwd: string, stateDir: string) => Promise<InjectResult>;
+}
+
+interface BridgeDispatchState {
+  records: unknown[];
+}
+
+interface IssueCooldownState {
+  by_issue: Record<string, number>;
+}
+
+interface StoredTriggerCooldownEntry {
+  at?: number;
+  last_request_id?: string;
+}
+
+interface TriggerCooldownState {
+  by_trigger: Record<string, number | StoredTriggerCooldownEntry>;
+}
+
+interface MailboxMessage {
+  message_id?: string;
+  notified_at?: string;
+}
+
+interface MailboxState {
+  worker: string;
+  messages: MailboxMessage[];
+}
+
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error ? safeString((error as { code?: unknown }).code) : '';
+}
+
 /**
  * Route dispatch state transitions through the Rust runtime binary.
  * Non-fatal: if the binary is missing or fails, the legacy JSON fallback lane
@@ -27,7 +126,7 @@ import {
  * owned path.
  * Disable entirely with OMX_RUNTIME_BRIDGE=0.
  */
-function runtimeExec(command, stateDir) {
+function runtimeExec(command: Record<string, unknown>, stateDir: string) {
   if (process.env.OMX_RUNTIME_BRIDGE === '0') return;
   try {
     const binaryPath = resolveRuntimeBinaryPath();
@@ -41,54 +140,58 @@ function runtimeExec(command, stateDir) {
   }
 }
 
-function readJson(path, fallback) {
+function readJson<T>(path: string, fallback: T): Promise<T> {
   return readFile(path, 'utf8')
-    .then((raw) => JSON.parse(raw))
+    .then((raw) => JSON.parse(raw) as T)
     .catch(() => fallback);
 }
 
-async function readBridgeDispatchRequests(stateDir, teamName) {
+async function readBridgeDispatchRequests(stateDir: string, teamName: string): Promise<DispatchRequest[] | null> {
   const candidate = join(stateDir, 'dispatch.json');
   if (!existsSync(candidate)) return null;
-  const parsed = await readJson(candidate, null);
+  const parsed = await readJson<BridgeDispatchState | null>(candidate, null);
   if (!parsed || !Array.isArray(parsed.records)) return null;
   return parsed.records
-    .map((record) => {
+    .map((record: unknown) => {
       if (!record || typeof record !== 'object') return null;
-      const metadata = record.metadata && typeof record.metadata === 'object' ? record.metadata : {};
+      const normalizedRecord = record as Record<string, unknown>;
+      const metadata = normalizedRecord.metadata && typeof normalizedRecord.metadata === 'object'
+        ? normalizedRecord.metadata as Record<string, unknown>
+        : {};
       const metadataTeam = safeString(metadata.team_name).trim();
       if (metadataTeam && metadataTeam !== teamName) return null;
-      return {
-        request_id: safeString(record.request_id).trim(),
+      const normalizedDispatchRecord: DispatchRequest = {
+        request_id: safeString(normalizedRecord.request_id).trim(),
         kind: safeString(metadata.kind).trim() || 'inbox',
         team_name: teamName,
-        to_worker: safeString(record.target).trim(),
+        to_worker: safeString(normalizedRecord.target).trim(),
         worker_index: typeof metadata.worker_index === 'number' ? metadata.worker_index : undefined,
         pane_id: safeString(metadata.pane_id).trim() || undefined,
-        trigger_message: safeString(metadata.trigger_message).trim() || safeString(record.reason).trim() || safeString(record.request_id).trim(),
+        trigger_message: safeString(metadata.trigger_message).trim() || safeString(normalizedRecord.reason).trim() || safeString(normalizedRecord.request_id).trim(),
         message_id: safeString(metadata.message_id).trim() || undefined,
         inbox_correlation_key: safeString(metadata.inbox_correlation_key).trim() || undefined,
         transport_preference: safeString(metadata.transport_preference).trim() || 'hook_preferred_with_fallback',
         fallback_allowed: typeof metadata.fallback_allowed === 'boolean' ? metadata.fallback_allowed : true,
-        status: safeString(record.status).trim() || 'pending',
+        status: safeString(normalizedRecord.status).trim() || 'pending',
         attempt_count: 0,
-        created_at: safeString(record.created_at).trim() || new Date().toISOString(),
+        created_at: safeString(normalizedRecord.created_at).trim() || new Date().toISOString(),
         updated_at:
-          safeString(record.delivered_at).trim()
-          || safeString(record.failed_at).trim()
-          || safeString(record.notified_at).trim()
-          || safeString(record.created_at).trim()
+          safeString(normalizedRecord.delivered_at).trim()
+          || safeString(normalizedRecord.failed_at).trim()
+          || safeString(normalizedRecord.notified_at).trim()
+          || safeString(normalizedRecord.created_at).trim()
           || new Date().toISOString(),
-        notified_at: safeString(record.notified_at).trim() || undefined,
-        delivered_at: safeString(record.delivered_at).trim() || undefined,
-        failed_at: safeString(record.failed_at).trim() || undefined,
-        last_reason: safeString(record.reason).trim() || undefined,
+        notified_at: safeString(normalizedRecord.notified_at).trim() || undefined,
+        delivered_at: safeString(normalizedRecord.delivered_at).trim() || undefined,
+        failed_at: safeString(normalizedRecord.failed_at).trim() || undefined,
+        last_reason: safeString(normalizedRecord.reason).trim() || undefined,
       };
+      return normalizedDispatchRecord;
     })
-    .filter((record) => record && record.request_id && record.to_worker && record.trigger_message);
+    .filter((record): record is DispatchRequest => record !== null && Boolean(record.request_id && record.to_worker && record.trigger_message));
 }
 
-async function writeJsonAtomic(path, value) {
+async function writeJsonAtomic<T>(path: string, value: T) {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   await writeFile(tmp, JSON.stringify(value, null, 2));
@@ -104,7 +207,7 @@ const DISPATCH_TRIGGER_COOLDOWN_ENV = 'OMX_TEAM_DISPATCH_TRIGGER_COOLDOWN_MS';
 const LEADER_PANE_MISSING_DEFERRED_REASON = 'leader_pane_missing_deferred';
 const LEADER_NOTIFICATION_DEFERRED_TYPE = 'leader_notification_deferred';
 
-async function emitOperationalHookEvent(cwd, eventName, context) {
+async function emitOperationalHookEvent(cwd: string, eventName: string, context: Record<string, unknown>) {
   try {
     const { buildNativeHookEvent } = await import('../../hooks/extensibility/events.js');
     const { dispatchHookEvent } = await import('../../hooks/extensibility/dispatcher.js');
@@ -135,21 +238,21 @@ function resolveDispatchTriggerCooldownMs(env = process.env) {
   return parsed;
 }
 
-function extractIssueKey(triggerMessage) {
+function extractIssueKey(triggerMessage: unknown) {
   const match = safeString(triggerMessage).match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
   return match?.[1]?.toUpperCase() || null;
 }
 
-function issueCooldownStatePath(teamDirPath) {
+function issueCooldownStatePath(teamDirPath: string) {
   return join(teamDirPath, 'dispatch', 'issue-cooldown.json');
 }
 
-function triggerCooldownStatePath(teamDirPath) {
+function triggerCooldownStatePath(teamDirPath: string) {
   return join(teamDirPath, 'dispatch', 'trigger-cooldown.json');
 }
 
-async function readIssueCooldownState(teamDirPath) {
-  const fallback = { by_issue: {} };
+async function readIssueCooldownState(teamDirPath: string): Promise<IssueCooldownState> {
+  const fallback: IssueCooldownState = { by_issue: {} };
   const parsed = await readJson(issueCooldownStatePath(teamDirPath), fallback);
   if (!parsed || typeof parsed !== 'object' || typeof parsed.by_issue !== 'object' || parsed.by_issue === null) {
     return fallback;
@@ -157,8 +260,8 @@ async function readIssueCooldownState(teamDirPath) {
   return parsed;
 }
 
-async function readTriggerCooldownState(teamDirPath) {
-  const fallback = { by_trigger: {} };
+async function readTriggerCooldownState(teamDirPath: string): Promise<TriggerCooldownState> {
+  const fallback: TriggerCooldownState = { by_trigger: {} };
   const parsed = await readJson(triggerCooldownStatePath(teamDirPath), fallback);
   if (!parsed || typeof parsed !== 'object' || typeof parsed.by_trigger !== 'object' || parsed.by_trigger === null) {
     return fallback;
@@ -166,24 +269,25 @@ async function readTriggerCooldownState(teamDirPath) {
   return parsed;
 }
 
-function normalizeTriggerKey(value) {
+function normalizeTriggerKey(value: unknown) {
   return safeString(value).replace(/\s+/g, ' ').trim();
 }
 
-function parseTriggerCooldownEntry(entry) {
+function parseTriggerCooldownEntry(entry: unknown): TriggerCooldownEntry {
   if (typeof entry === 'number') {
     return { at: entry, lastRequestId: '' };
   }
   if (!entry || typeof entry !== 'object') {
     return { at: NaN, lastRequestId: '' };
   }
+  const record = entry as StoredTriggerCooldownEntry;
   return {
-    at: Number(entry.at),
-    lastRequestId: safeString(entry.last_request_id).trim(),
+    at: Number(record.at),
+    lastRequestId: safeString(record.last_request_id).trim(),
   };
 }
 
-async function withDispatchLock(teamDirPath, fn) {
+async function withDispatchLock<T>(teamDirPath: string, fn: () => Promise<T>): Promise<T> {
   const lockDir = join(teamDirPath, 'dispatch', '.lock');
   const ownerPath = join(lockDir, 'owner');
   const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
@@ -200,8 +304,8 @@ async function withDispatchLock(teamDirPath, fn) {
         throw error;
       }
       break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
+    } catch (error: unknown) {
+      if (errorCode(error) !== 'EEXIST') throw error;
       try {
         const info = await stat(lockDir);
         if (Date.now() - info.mtimeMs > DISPATCH_LOCK_STALE_MS) {
@@ -230,7 +334,7 @@ async function withDispatchLock(teamDirPath, fn) {
   }
 }
 
-async function withMailboxLock(teamDirPath, workerName, fn) {
+async function withMailboxLock<T>(teamDirPath: string, workerName: string, fn: () => Promise<T>): Promise<T> {
   const lockDir = join(teamDirPath, 'mailbox', `.lock-${workerName}`);
   const ownerPath = join(lockDir, 'owner');
   const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
@@ -247,8 +351,8 @@ async function withMailboxLock(teamDirPath, workerName, fn) {
         throw error;
       }
       break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
+    } catch (error: unknown) {
+      if (errorCode(error) !== 'EEXIST') throw error;
       try {
         const info = await stat(lockDir);
         if (Date.now() - info.mtimeMs > DISPATCH_LOCK_STALE_MS) {
@@ -277,12 +381,12 @@ async function withMailboxLock(teamDirPath, workerName, fn) {
   }
 }
 
-function resolveLeaderPaneId(config) {
+function resolveLeaderPaneId(config: DispatchConfig) {
   return safeString(config?.leader_pane_id).trim();
 }
 
 
-function defaultInjectTarget(request, config) {
+function defaultInjectTarget(request: DispatchRequest, config: DispatchConfig): InjectTarget | null {
   if (request.to_worker === 'leader-fixed') {
     const leaderPaneId = resolveLeaderPaneId(config);
     if (leaderPaneId) return { type: 'pane', value: leaderPaneId };
@@ -309,7 +413,7 @@ async function appendLeaderNotificationDeferredEvent({
   tmuxSession = '',
   leaderPaneId = '',
   sourceType = 'team_dispatch',
-}) {
+}: LeaderDeferredEventArgs) {
   const eventsDir = join(stateDir, 'team', teamName, 'events');
   const eventsPath = join(eventsDir, 'events.ndjson');
   const event = {
@@ -331,7 +435,7 @@ async function appendLeaderNotificationDeferredEvent({
   await appendFile(eventsPath, JSON.stringify(event) + '\n').catch(() => {});
 }
 
-function resolveWorkerCliForRequest(request, config) {
+function resolveWorkerCliForRequest(request: DispatchRequest, config: DispatchConfig) {
   const workers = Array.isArray(config?.workers) ? config.workers : [];
   const idx = Number.isFinite(request?.worker_index) ? Number(request.worker_index) : null;
   if (idx !== null) {
@@ -342,12 +446,12 @@ function resolveWorkerCliForRequest(request, config) {
   return 'codex';
 }
 
-function capturedPaneContainsTrigger(captured, trigger) {
+function capturedPaneContainsTrigger(captured: unknown, trigger: unknown) {
   if (!captured || !trigger) return false;
   return normalizeTmuxCapture(captured).includes(normalizeTmuxCapture(trigger));
 }
 
-function capturedPaneContainsTriggerNearTail(captured, trigger, nonEmptyTailLines = 24) {
+function capturedPaneContainsTriggerNearTail(captured: unknown, trigger: unknown, nonEmptyTailLines = 24) {
   if (!captured || !trigger) return false;
   const normalizedTrigger = normalizeTmuxCapture(trigger);
   if (!normalizedTrigger) return false;
@@ -363,7 +467,7 @@ function capturedPaneContainsTriggerNearTail(captured, trigger, nonEmptyTailLine
 const INJECT_VERIFY_DELAY_MS = 250;
 const INJECT_VERIFY_ROUNDS = 3;
 
-async function injectDispatchRequest(request, config, cwd, stateDir) {
+async function injectDispatchRequest(request: DispatchRequest, config: DispatchConfig, cwd: string, stateDir: string): Promise<InjectResult> {
   const traceId = dispatchTraceId(request);
   const target = defaultInjectTarget(request, config);
   await decisionTrace(cwd, 'dispatch.target_selected', {
@@ -567,17 +671,17 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
   return { ok: true, reason: 'tmux_send_keys_unconfirmed', pane: resolution.paneTarget };
 }
 
-function shouldSkipRequest(request) {
+function shouldSkipRequest(request: DispatchRequest) {
   if (request.status !== 'pending') return true;
   const preference = safeString(request.transport_preference).trim();
   return preference !== '' && preference !== 'hook_preferred_with_fallback';
 }
 
-async function updateMailboxNotified(stateDir, teamName, workerName, messageId) {
+async function updateMailboxNotified(stateDir: string, teamName: string, workerName: string, messageId: string) {
   const teamDirPath = join(stateDir, 'team', teamName);
   const mailboxPath = join(teamDirPath, 'mailbox', `${workerName}.json`);
   return await withMailboxLock(teamDirPath, workerName, async () => {
-    const mailbox = await readJson(mailboxPath, { worker: workerName, messages: [] });
+    const mailbox = await readJson<MailboxState>(mailboxPath, { worker: workerName, messages: [] });
     if (!mailbox || !Array.isArray(mailbox.messages)) return false;
     const msg = mailbox.messages.find((candidate) => candidate?.message_id === messageId);
     if (!msg) return false;
@@ -587,27 +691,27 @@ async function updateMailboxNotified(stateDir, teamName, workerName, messageId) 
   });
 }
 
-async function appendDispatchLog(logsDir, event) {
+async function appendDispatchLog(logsDir: string, event: Record<string, unknown>) {
   const path = join(logsDir, `team-dispatch-${new Date().toISOString().slice(0, 10)}.jsonl`);
   await mkdir(logsDir, { recursive: true }).catch(() => {});
   await appendFile(path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
 }
 
-async function decisionTrace(cwd, event, payload = {}) {
+async function decisionTrace(cwd: string, event: string, payload: Record<string, unknown> = {}) {
   await appendRuntimeDecisionTrace(cwd, 'team-dispatch', event, payload).catch(() => {});
 }
 
-function dispatchTraceId(request) {
+function dispatchTraceId(request: Partial<DispatchRequest> | null | undefined) {
   return buildRuntimeTraceId('dispatch', safeString(request?.request_id).trim() || 'unknown');
 }
 
 export async function drainPendingTeamDispatch({
-  cwd,
+  cwd = process.cwd(),
   stateDir = resolveBridgeStateDir(cwd),
   logsDir = join(cwd, '.omx', 'logs'),
   maxPerTick = 5,
   injector = injectDispatchRequest,
-} = {}) {
+}: DrainPendingTeamDispatchOptions = {}) {
   if (safeString(process.env.OMX_TEAM_WORKER)) {
     return { processed: 0, skipped: 0, failed: 0, reason: 'worker_context' };
   }
@@ -629,16 +733,16 @@ export async function drainPendingTeamDispatch({
     const configPath = join(teamDirPath, 'config.json');
     const requestsPath = join(teamDirPath, 'dispatch', 'requests.json');
 
-    const config = await readJson(existsSync(manifestPath) ? manifestPath : configPath, {});
+    const config = await readJson<DispatchConfig>(existsSync(manifestPath) ? manifestPath : configPath, {});
     await withDispatchLock(teamDirPath, async () => {
       const bridgeRequests = await readBridgeDispatchRequests(stateDir, teamName);
       const usingLegacyRequests = bridgeRequests === null;
-      const requests = usingLegacyRequests ? await readJson(requestsPath, []) : bridgeRequests;
+      const requests = usingLegacyRequests ? await readJson<DispatchRequest[]>(requestsPath, []) : bridgeRequests;
       if (!Array.isArray(requests)) return;
       const issueCooldownState = await readIssueCooldownState(teamDirPath);
       const triggerCooldownState = await readTriggerCooldownState(teamDirPath);
-      const issueCooldownByIssue = issueCooldownState.by_issue || {};
-      const triggerCooldownByKey = triggerCooldownState.by_trigger || {};
+      const issueCooldownByIssue: Record<string, number> = issueCooldownState.by_issue || {};
+      const triggerCooldownByKey: Record<string, number | StoredTriggerCooldownEntry> = triggerCooldownState.by_trigger || {};
       const nowMs = Date.now();
 
       let mutated = false;

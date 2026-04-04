@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { existsSync } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 function argValue(name: string, fallback = ''): string {
   const index = process.argv.indexOf(name);

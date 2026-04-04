@@ -42,13 +42,13 @@ export function runProcessWithTrace(
       reject(new Error(`timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    child.stdout.on('data', (chunk: any) => {
+    child.stdout.on('data', (chunk: Buffer | string) => {
       stdout += chunk.toString();
     });
-    child.stderr.on('data', (chunk: any) => {
+    child.stderr.on('data', (chunk: Buffer | string) => {
       stderr += chunk.toString();
     });
-    child.on('error', (err: any) => {
+    child.on('error', (err: Error) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -60,7 +60,7 @@ export function runProcessWithTrace(
       });
       reject(err);
     });
-    child.on('close', (code: any) => {
+    child.on('close', (code: number | null) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);

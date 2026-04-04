@@ -1,5 +1,5 @@
 import { safeString } from './utils.js';
-import { runProcess, runProcessWithTrace } from './process-runner.js';
+import { runProcessWithTrace } from './process-runner.js';
 import { traceDecision } from '../../debug/runtime-trace.js';
 import {
   buildCapturePaneArgv,
@@ -10,24 +10,60 @@ import {
   paneHasActiveTask,
   paneLooksReady,
   resolveCodexPane,
+  type SendKeysArgv,
 } from '../tmux-hook-engine.js';
 
-export function mapPaneInjectionReadinessReason(reason: any): any {
-  return reason === 'pane_running_shell' ? 'agent_not_running' : reason;
+export interface PaneInjectionReadinessResult {
+  ok: boolean;
+  sent: boolean;
+  reason: string;
+  paneTarget: string;
+  paneCurrentCommand: string;
+  paneCapture: string;
+}
+
+export interface SendPaneInputResult {
+  ok: boolean;
+  sent: boolean;
+  reason: string;
+  paneTarget: string;
+  argv?: SendKeysArgv;
+  error?: string;
+}
+
+interface PaneInjectionReadinessOptions {
+  skipIfScrolling?: boolean;
+  captureLines?: number;
+  requireRunningAgent?: boolean;
+  requireReady?: boolean;
+  requireIdle?: boolean;
+  preferCanonicalBypass?: boolean;
+}
+
+interface SendPaneInputOptions {
+  paneTarget: string;
+  prompt: string;
+  submitKeyPresses?: number;
+  submitDelayMs?: number;
+  typePrompt?: boolean;
+}
+
+export function mapPaneInjectionReadinessReason(reason: unknown): string {
+  return reason === 'pane_running_shell' ? 'agent_not_running' : safeString(reason);
 }
 
 async function decisionTrace(event: string, payload: Record<string, unknown> = {}): Promise<void> {
   await traceDecision(process.cwd(), 'team-tmux-guard', event, payload).catch(() => {});
 }
 
-export async function evaluatePaneInjectionReadiness(paneTarget: any, {
+export async function evaluatePaneInjectionReadiness(paneTarget: string, {
   skipIfScrolling = false,
   captureLines = 80,
   requireRunningAgent = true,
   requireReady = true,
   requireIdle = true,
   preferCanonicalBypass = true,
-} = {}): Promise<any> {
+}: PaneInjectionReadinessOptions = {}): Promise<PaneInjectionReadinessResult> {
   const target = safeString(paneTarget).trim();
   await decisionTrace('pane_guard.readiness_start', {
     pane_target: target,
@@ -296,7 +332,7 @@ export async function sendPaneInput({
   submitKeyPresses = 2,
   submitDelayMs = 0,
   typePrompt = true,
-}: any): Promise<any> {
+}: SendPaneInputOptions): Promise<SendPaneInputResult> {
   const target = safeString(paneTarget).trim();
   await decisionTrace('pane_guard.send_start', {
     pane_target: target,
@@ -383,6 +419,6 @@ export async function sendPaneInput({
   }
 }
 
-export async function checkPaneReadyForTeamSendKeys(paneTarget: any): Promise<any> {
+export async function checkPaneReadyForTeamSendKeys(paneTarget: string): Promise<PaneInjectionReadinessResult> {
   return evaluatePaneInjectionReadiness(paneTarget);
 }

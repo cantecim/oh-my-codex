@@ -1,11 +1,9 @@
-// @ts-nocheck
 /**
  * Tmux prompt injection for notify-hook.
  * Handles pane resolution, injection guards, and state healing.
  */
 
 import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { safeString, asNumber } from './utils.js';
 import { buildRuntimeTraceId, traceDecision as appendRuntimeDecisionTrace } from '../../debug/runtime-trace.js';
@@ -15,6 +13,7 @@ import {
   pruneRecentKeys,
   getScopedStateDirsForCurrentSession,
   readdir,
+  type TmuxState,
 } from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
@@ -25,9 +24,37 @@ import {
   evaluateInjectionGuards,
   buildSendKeysArgv,
   resolveCodexPane,
+  type TmuxTargetConfig,
 } from '../tmux-hook-engine.js';
 
-function isHudPaneStartCommand(startCommand: any): boolean {
+interface PaneResolutionResult {
+  paneTarget: string | null;
+  reason: string;
+  matched_session?: string | null;
+  pane_cwd?: string;
+  expected_cwd?: string;
+}
+
+interface TmuxSessionRow {
+  paneId: string;
+  active: boolean;
+  currentCommand: string;
+  startCommand: string;
+}
+
+interface HandleTmuxInjectionArgs {
+  payload: Record<string, unknown>;
+  cwd: string;
+  stateDir: string;
+  logsDir: string;
+}
+
+interface ActiveModeState {
+  active?: boolean;
+  tmux_pane_id?: string;
+}
+
+function isHudPaneStartCommand(startCommand: unknown): boolean {
   return /\bomx\b.*\bhud\b.*--watch/i.test(safeString(startCommand));
 }
 
@@ -35,15 +62,16 @@ async function decisionTrace(cwd: string, event: string, payload: Record<string,
   await appendRuntimeDecisionTrace(cwd, 'tmux-injection', event, payload).catch(() => {});
 }
 
-function tmuxInjectionTraceId(target: any, turnId = ''): string {
-  return buildRuntimeTraceId('tmux-injection', safeString(turnId).trim() || safeString(target?.value || target).trim() || 'unknown');
+function tmuxInjectionTraceId(target: TmuxTargetConfig | string | null | undefined, turnId = ''): string {
+  const targetLabel = typeof target === 'string' ? target : target?.value;
+  return buildRuntimeTraceId('tmux-injection', safeString(turnId).trim() || safeString(targetLabel).trim() || 'unknown');
 }
 
-function shouldReturnResolvedPane(result: any): boolean {
+function shouldReturnResolvedPane(result: PaneResolutionResult): boolean {
   return Boolean(result?.paneTarget) || safeString(result?.reason).trim() === 'pane_cwd_mismatch';
 }
 
-async function resolvePaneCwdMismatch(paneId: string, expectedCwd: any): Promise<any | null> {
+async function resolvePaneCwdMismatch(paneId: string, expectedCwd: string): Promise<PaneResolutionResult | null> {
   if (!expectedCwd) return null;
   try {
     const paneCwdResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}']);
@@ -62,7 +90,7 @@ async function resolvePaneCwdMismatch(paneId: string, expectedCwd: any): Promise
   return null;
 }
 
-async function finalizeResolvedPane(paneId: string, reason: string, expectedCwd: any): Promise<any> {
+async function finalizeResolvedPane(paneId: string, reason: string, expectedCwd: string): Promise<PaneResolutionResult> {
   const cwdMismatch = await resolvePaneCwdMismatch(paneId, expectedCwd);
   if (cwdMismatch) return cwdMismatch;
   let sessionName = '';
@@ -79,7 +107,7 @@ async function finalizeResolvedPane(paneId: string, reason: string, expectedCwd:
   };
 }
 
-async function resolveCanonicalPaneFromPaneTarget(paneTarget: any, expectedCwd: any): Promise<any> {
+async function resolveCanonicalPaneFromPaneTarget(paneTarget: string, expectedCwd: string): Promise<PaneResolutionResult> {
   const traceId = tmuxInjectionTraceId(paneTarget);
   const cwd = process.cwd();
   await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
@@ -216,9 +244,9 @@ async function resolveCanonicalPaneFromPaneTarget(paneTarget: any, expectedCwd: 
   return finalizeResolvedPane(healedPaneId, 'healed_hud_pane_target', expectedCwd);
 }
 
-export async function resolveSessionToPane(sessionName: any): Promise<string | null> {
+export async function resolveSessionToPane(sessionName: string): Promise<string | null> {
   const result = await runProcess('tmux', ['list-panes', '-t', sessionName, '-F', '#{pane_id}\t#{pane_active}\t#{pane_current_command}\t#{pane_start_command}']);
-  const rows = result.stdout
+  const rows: TmuxSessionRow[] = result.stdout
     .split('\n')
     .map((line: string) => line.trim())
     .filter(Boolean)
@@ -234,11 +262,11 @@ export async function resolveSessionToPane(sessionName: any): Promise<string | n
         startCommand: safeString(startCommand).trim(),
       };
     })
-    .filter((row: any) => row.paneId.startsWith('%'));
+    .filter((row) => row.paneId.startsWith('%'));
   await decisionTrace(process.cwd(), 'tmux_injection.resolve_session_rows', {
     session_name: safeString(sessionName).trim(),
     row_count: rows.length,
-    rows: rows.map((row: any) => ({
+    rows: rows.map((row) => ({
       pane_id: row.paneId,
       active: row.active,
       current_command: row.currentCommand,
@@ -248,18 +276,23 @@ export async function resolveSessionToPane(sessionName: any): Promise<string | n
   });
   if (rows.length === 0) return null;
 
-  const nonHudRows = rows.filter((row: any) => !isHudPaneStartCommand(row.startCommand));
-  const canonicalRows = nonHudRows.filter((row: any) => /\bcodex\b/i.test(row.startCommand));
-  const activeCanonical = canonicalRows.find((row: any) => row.active);
+  const nonHudRows = rows.filter((row) => !isHudPaneStartCommand(row.startCommand));
+  const canonicalRows = nonHudRows.filter((row) => /\bcodex\b/i.test(row.startCommand));
+  const activeCanonical = canonicalRows.find((row) => row.active);
   if (activeCanonical) return activeCanonical.paneId;
   if (canonicalRows[0]) return canonicalRows[0].paneId;
 
-  const activeNonHud = nonHudRows.find((row: any) => row.active);
+  const activeNonHud = nonHudRows.find((row) => row.active);
   if (activeNonHud) return activeNonHud.paneId;
   return nonHudRows[0]?.paneId || null;
 }
 
-export async function resolvePaneTarget(target: any, fallbackPane: any, expectedCwd: any, modePane: any): Promise<any> {
+export async function resolvePaneTarget(
+  target: TmuxTargetConfig | null,
+  fallbackPane: string,
+  expectedCwd: string,
+  modePane: string,
+): Promise<PaneResolutionResult> {
   const traceId = tmuxInjectionTraceId(target);
   await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_start', {
     trace_id: traceId,
@@ -390,7 +423,7 @@ export async function handleTmuxInjection({
   cwd,
   stateDir,
   logsDir,
-}: any): Promise<void> {
+}: HandleTmuxInjectionArgs): Promise<void> {
   const omxDir = join(cwd, '.omx');
   const configPath = join(omxDir, 'tmux-hook.json');
   const hookStatePath = join(stateDir, 'tmux-hook-state.json');
@@ -408,11 +441,11 @@ export async function handleTmuxInjection({
   const { normalizeInputMessages } = await import('./payload-parser.js');
   const inputMessages = normalizeInputMessages(payload);
   const sourceText = inputMessages.join('\n');
-  const state = normalizeTmuxState(await readJsonIfExists(hookStatePath, null));
+  const state: TmuxState = normalizeTmuxState(await readJsonIfExists(hookStatePath, null));
   state.recent_keys = pruneRecentKeys(state.recent_keys, now);
 
   const activeModes: string[] = [];
-  const activeModeStates: Record<string, any> = {};
+  const activeModeStates: Record<string, ActiveModeState> = {};
   const scannedStateDirs = new Set<string>();
   const payloadSessionId = safeString(payload.session_id || payload['session-id'] || '');
   const scanActiveModeStateDirs = async (dirs: string[], preserveExisting = false) => {
@@ -430,7 +463,7 @@ export async function handleTmuxInjection({
           const modeName = file.replace('-state.json', '');
           activeModes.push(modeName);
           if (!preserveExisting || !activeModeStates[modeName]) {
-            activeModeStates[modeName] = parsed;
+            activeModeStates[modeName] = parsed as ActiveModeState;
           }
         }
       }
@@ -454,7 +487,7 @@ export async function handleTmuxInjection({
     selected_mode: mode,
     result: mode ? 'selected' : 'none',
   });
-  const modeState = mode ? (activeModeStates[mode] || {}) : {};
+  const modeState: ActiveModeState = mode ? (activeModeStates[mode] || {}) : {};
   const modePane = safeString(modeState.tmux_pane_id || '');
   const preGuard = evaluateInjectionGuards({
     config,
@@ -469,7 +502,7 @@ export async function handleTmuxInjection({
     state,
   });
 
-  const baseLog: any = {
+  const baseLog: Record<string, unknown> = {
     timestamp: nowIso,
     type: 'tmux_hook',
     mode,
@@ -592,6 +625,25 @@ export async function handleTmuxInjection({
       state.last_prompt_preview = prompt.slice(0, 120);
     }
   };
+
+  if (!argv) {
+    updateStateForAttempt(false, 'send_failed');
+    await writeFile(hookStatePath, JSON.stringify(state, null, 2)).catch(() => {});
+    await logTmuxHookEvent(logsDir, {
+      ...baseLog,
+      event: 'injection_error',
+      reason: 'send_failed',
+      pane_target: paneTarget,
+      error: 'missing_send_argv',
+    });
+    await decisionTrace(cwd, 'tmux_injection.send_result', {
+      pane_target: paneTarget,
+      reason: 'send_failed',
+      error: 'missing_send_argv',
+      result: 'error',
+    });
+    return;
+  }
 
   // Shared pane-state guard: skip injection when the target pane is scrolling,
   // has returned to a shell, is still bootstrapping, or is visibly busy.

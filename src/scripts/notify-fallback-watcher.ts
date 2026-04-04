@@ -432,7 +432,7 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
     const workerPaneIds: string[] = workers
       .map((worker) => safeString(worker?.pane_id).trim())
       .filter(Boolean);
-    const paneStatus = await checkWorkerPanesAlive(tmuxSession, workerPaneIds as any);
+    const paneStatus = await checkWorkerPanesAlive(tmuxSession, workerPaneIds);
     await decisionTrace('watcher.worker_panes_alive_check', {
       trace_id: watcherTraceId(watcherTickSeq || 0),
       tick_seq: watcherTickSeq || 0,
@@ -1394,7 +1394,7 @@ async function runDispatchDrainTick(): Promise<void> {
     result: 'start',
   });
   try {
-    const result = await drainPendingTeamDispatch({ cwd, stateDir, logsDir, maxPerTick: dispatchTickMax } as any);
+    const result = await drainPendingTeamDispatch({ cwd, stateDir, logsDir, maxPerTick: dispatchTickMax });
     dispatchDrainRuns += 1;
     lastDispatchDrain = {
       leader_only: safeString(process.env.OMX_TEAM_WORKER || '').trim() === '',

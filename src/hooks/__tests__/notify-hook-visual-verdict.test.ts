@@ -62,7 +62,7 @@ describe('visual-verdict – parseVisualVerdict', () => {
     const { parseVisualVerdict } = await loadModule('notify-hook/visual-verdict.js');
     assert.equal(parseVisualVerdict(null), null);
     assert.equal(parseVisualVerdict(undefined), null);
-    assert.equal(parseVisualVerdict(42 as any), null);
+    assert.equal(parseVisualVerdict(42), null);
     assert.equal(parseVisualVerdict(''), null);
   });
 });
@@ -259,12 +259,13 @@ describe('visual-verdict – import failure logging', () => {
       try {
         await import(pathToFileURL(join(SCRIPTS_DIR, 'notify-hook/non-existent-visual-verdict.js')).href);
         assert.fail('Expected import to throw');
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
         const warnEntry = JSON.stringify({
           timestamp: new Date().toISOString(),
           level: 'warn',
           type: 'visual_verdict_import_failure',
-          error: err?.message || String(err),
+          error: errorMessage,
           session_id: 'sess-imp',
           turn_id: 'turn-imp',
         });

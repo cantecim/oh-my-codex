@@ -38,6 +38,27 @@ import {
 import { isLeaderStale, resolveLeaderStalenessThresholdMs, maybeNudgeTeamLeader } from './notify-hook/team-leader-nudge.js';
 import { handleTmuxInjection } from './notify-hook/tmux-injection.js';
 import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
+
+type MetricsState = {
+  total_turns: number;
+  session_turns: number;
+  last_activity: string;
+  session_input_tokens: number;
+  session_output_tokens: number;
+  session_total_tokens: number;
+  five_hour_limit_pct?: number;
+  weekly_limit_pct?: number;
+};
+
+type HudState = {
+  last_turn_at: string;
+  turn_count: number;
+  last_agent_output?: string;
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 import {
   buildOperationalContext,
   deriveAssistantSignalEvents,
@@ -148,7 +169,7 @@ async function main() {
     thread_id: payload['thread-id'] || payload.thread_id,
     turn_id: payload['turn-id'] || payload.turn_id,
     input_preview: (payload['input-messages'] || payload.input_messages || [])
-      .map((m: any) => m.slice(0, 100))
+      .map((m: unknown) => safeString(m).slice(0, 100))
       .join('; '),
     output_preview: (payload['last-assistant-message'] || payload.last_assistant_message || '')
       .slice(0, 200),
@@ -220,7 +241,7 @@ async function main() {
   if (!isTeamWorker) {
     const metricsPath = join(omxDir, 'metrics.json');
     try {
-      let metrics = {
+      let metrics: MetricsState = {
         total_turns: 0,
         session_turns: 0,
         last_activity: '',
@@ -268,8 +289,8 @@ async function main() {
       }
 
       if (quotaUsage) {
-        if (quotaUsage.fiveHourLimitPct !== null) (metrics as any).five_hour_limit_pct = quotaUsage.fiveHourLimitPct;
-        if (quotaUsage.weeklyLimitPct !== null) (metrics as any).weekly_limit_pct = quotaUsage.weeklyLimitPct;
+        if (quotaUsage.fiveHourLimitPct !== null) metrics.five_hour_limit_pct = quotaUsage.fiveHourLimitPct;
+        if (quotaUsage.weeklyLimitPct !== null) metrics.weekly_limit_pct = quotaUsage.weeklyLimitPct;
       }
 
       await writeFile(metricsPath, JSON.stringify(metrics, null, 2));
@@ -293,13 +314,13 @@ async function main() {
   if (!isTeamWorker) {
     const hudStatePath = join(stateDir, 'hud-state.json');
     try {
-      let hudState = { last_turn_at: '', turn_count: 0 };
+      let hudState: HudState = { last_turn_at: '', turn_count: 0 };
       if (existsSync(hudStatePath)) {
         hudState = JSON.parse(await readFile(hudStatePath, 'utf-8'));
       }
       hudState.last_turn_at = new Date().toISOString();
       hudState.turn_count = (hudState.turn_count || 0) + 1;
-      (hudState as any).last_agent_output = (payload['last-assistant-message'] || payload.last_assistant_message || '')
+      hudState.last_agent_output = (payload['last-assistant-message'] || payload.last_assistant_message || '')
         .slice(0, 100);
       await writeFile(hudStatePath, JSON.stringify(hudState, null, 2));
     } catch {
@@ -508,7 +529,7 @@ async function main() {
         timestamp: new Date().toISOString(),
         level: 'warn',
         type: 'visual_verdict_import_failure',
-        error: (err as any)?.message || String(err),
+        error: errorMessage(err),
         session_id: payloadSessionId,
         turn_id: safeString(payload['turn-id'] || payload.turn_id || ''),
       });

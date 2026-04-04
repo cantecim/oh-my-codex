@@ -164,35 +164,14 @@ describe('notify-hook per-worker idle notification', () => {
         updated_at: new Date(Date.now() - 5000).toISOString(),
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%79" ]]; then
-    echo "zsh"
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%1 12345"
-  exit 0
-fi
-exit 0
-`;
+      const fakeTmux = buildFakeTmuxScript(tmuxLogPath, {
+        listPaneLines: ['%1 12345'],
+        paneProbes: {
+          '%79': {
+            currentCommand: 'zsh',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 

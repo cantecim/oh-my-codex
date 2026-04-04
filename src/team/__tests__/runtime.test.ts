@@ -21,6 +21,10 @@ import {
   claimTask,
   transitionTaskStatus,
   writeWorkerStatus,
+  type TeamConfig,
+  type TeamManifestV2,
+  type TeamTask,
+  type WorkerInfo,
 } from '../state.js';
 import {
   monitorTeam,
@@ -58,6 +62,27 @@ async function addWorktree(repo: string, branchName: string, pathPrefix: string)
 
 function expectedLowComplexityModel(codexHomeOverride?: string): string {
   return resolveTeamLowComplexityDefaultModel(codexHomeOverride);
+}
+
+async function readJsonFile<T>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, 'utf-8')) as T;
+}
+
+type ClaimedTask = TeamTask & { claim: NonNullable<TeamTask['claim']> };
+type LegacyPolicyManifest = TeamManifestV2 & {
+  policy?: TeamManifestV2['policy'] & { cleanup_requires_all_workers_inactive?: boolean };
+  governance?: TeamManifestV2['governance'];
+};
+type PromptResumeWorker = Omit<WorkerInfo, 'pid' | 'pane_id'> & { pid?: number; pane_id?: string | null };
+type PromptResumeConfig = TeamConfig & {
+  leader_pane_id?: string | null;
+  hud_pane_id?: string | null;
+  workers: PromptResumeWorker[];
+};
+
+function requireClaim(task: TeamTask): ClaimedTask {
+  assert.ok(task.claim);
+  return task as ClaimedTask;
 }
 function withEmptyPath<T>(fn: () => T): T {
   const prev = process.env.PATH;
@@ -561,7 +586,7 @@ sleep 5
 
     await initTeamState('parent-team', 'parent', 'executor', 1, cwd);
     const parentManifestPath = join(cwd, '.omx', 'state', 'team', 'parent-team', 'manifest.v2.json');
-    const parentManifest = JSON.parse(await readFile(parentManifestPath, 'utf-8')) as any;
+    const parentManifest = await readJsonFile<TeamManifestV2>(parentManifestPath);
     parentManifest.governance = { ...(parentManifest.governance || {}), nested_teams_allowed: true };
     await writeFile(parentManifestPath, JSON.stringify(parentManifest, null, 2));
 
@@ -1700,12 +1725,12 @@ process.on('SIGTERM', () => {
       if (!claim.ok) throw new Error('claim failed');
 
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-runtime-reassign', 'tasks', `task-${task.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readJsonFile<TeamTask>(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeAtomic(taskPath, JSON.stringify(current, null, 2));
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-runtime-reassign', 'manifest.v2.json');
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
+      const manifest = await readJsonFile<TeamManifestV2>(manifestPath);
       sleeper1 = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: false });
       sleeper2 = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: false });
       manifest.policy = { ...(manifest.policy || {}), worker_launch_mode: 'prompt' };
@@ -1751,7 +1776,7 @@ process.on('SIGTERM', () => {
       if (!claim.ok) throw new Error('claim failed');
 
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-runtime-reclaim', 'tasks', `task-${t.id}.json`);
-      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      const current = requireClaim(await readJsonFile<TeamTask>(taskPath));
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeAtomic(taskPath, JSON.stringify(current, null, 2));
 
@@ -2404,7 +2429,7 @@ process.on('SIGTERM', () => {
       );
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-shutdown-gate-override', 'manifest.v2.json');
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
+      const manifest = await readJsonFile<LegacyPolicyManifest>(manifestPath);
       manifest.governance = {
         ...(manifest.governance || {}),
         cleanup_requires_all_workers_inactive: false,
@@ -2431,13 +2456,13 @@ process.on('SIGTERM', () => {
       );
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-shutdown-gate-legacy', 'manifest.v2.json');
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
-      manifest.policy = {
-        ...(manifest.policy || {}),
+      const manifest = await readJsonFile<LegacyPolicyManifest>(manifestPath);
+      const { governance: _governance, ...legacyManifest } = manifest;
+      legacyManifest.policy = {
+        ...(legacyManifest.policy || {}),
         cleanup_requires_all_workers_inactive: false,
       };
-      delete manifest.governance;
-      await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+      await writeFile(manifestPath, JSON.stringify(legacyManifest, null, 2));
 
       await shutdownTeam('team-shutdown-gate-legacy', cwd);
 
@@ -2971,13 +2996,14 @@ esac
     try {
       await initTeamState('team-prompt-resume', 'prompt resume test', 'executor', 1, cwd);
       const configPath = join(cwd, '.omx', 'state', 'team', 'team-prompt-resume', 'config.json');
-      const config = JSON.parse(await readFile(configPath, 'utf-8')) as any;
+      const config = await readJsonFile<PromptResumeConfig>(configPath);
       config.worker_launch_mode = 'prompt';
       config.tmux_session = 'prompt-team-prompt-resume';
       config.leader_pane_id = null;
       config.hud_pane_id = null;
-      config.workers[0].pid = sleeperPid;
-      config.workers[0].pane_id = null;
+      const promptWorker = config.workers[0] as PromptResumeWorker;
+      promptWorker.pid = sleeperPid;
+      promptWorker.pane_id = null;
       await writeFile(configPath, JSON.stringify(config, null, 2));
 
       const runtime = await resumeTeam('team-prompt-resume', cwd);
@@ -3009,7 +3035,7 @@ esac
       );
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-delegation', 'manifest.v2.json');
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
+      const manifest = await readJsonFile<TeamManifestV2>(manifestPath);
       manifest.governance = { ...(manifest.governance || {}), delegation_only: true };
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
@@ -3109,7 +3135,7 @@ esac
       );
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-approval', 'manifest.v2.json');
-      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
+      const manifest = await readJsonFile<TeamManifestV2>(manifestPath);
       manifest.governance = { ...(manifest.governance || {}), plan_approval_required: true };
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
