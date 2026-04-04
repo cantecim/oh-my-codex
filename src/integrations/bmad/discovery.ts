@@ -15,7 +15,7 @@ const BMAD_STRONG_SIGNALS = [
 const PRD_PATTERN = /(?:^|[-_.])prd(?:[-_.]|$)|^prd\.md$/i;
 const UX_PATTERN = /(?:^|[-_.])ux(?:[-_.](?:design|spec))?(?:[-_.]|$)|ux-design|ux-spec/i;
 const ARCHITECTURE_PATTERN = /(?:^|[-_.])architecture(?:[-_.]|$)|^architecture\.md$/i;
-const EPIC_PATTERN = /(?:^|[-_.])epic(?:[-_.]|\d|$)/i;
+const EPIC_PATTERN = /^epic(?:[-_.]|\d|$)/i;
 const STORY_PATTERN = /(?:^|[-_.])story(?:[-_.]|\d|$)/i;
 const SPRINT_STATUS_PATTERN = /^sprint-status\.(?:ya?ml|json)$/i;
 const SPRINT_PLANNING_PATTERN = /^sprint-planning(?:[-_.].+)?\.(?:md|ya?ml|json)$/i;
@@ -63,10 +63,6 @@ function classifyTrack(index: Pick<BmadArtifactIndex, 'architecturePaths' | 'prd
   return 'unknown';
 }
 
-function isPathInEpicsDir(relativePath: string): boolean {
-  return relativePath.split('/').includes('epics');
-}
-
 async function collectPathMetadata(paths: readonly string[], projectRoot: string): Promise<Record<string, BmadPathMetadata>> {
   const metadata: Record<string, BmadPathMetadata> = {};
   for (const fullPath of paths) {
@@ -110,11 +106,7 @@ export async function buildBmadArtifactIndex(projectRoot: string): Promise<BmadA
 
   const planningFiles = await walkFiles(planningRoot);
   const implementationFiles = await walkFiles(implementationRoot);
-  const allKnownFiles = [
-    ...planningFiles,
-    ...implementationFiles,
-    ...(existsSync(projectContextPath) ? [projectContextPath] : []),
-  ];
+  const allKnownFiles = [...planningFiles, ...implementationFiles, ...(existsSync(projectContextPath) ? [projectContextPath] : [])];
 
   const prdPaths: string[] = [];
   const uxPaths: string[] = [];
@@ -123,15 +115,20 @@ export async function buildBmadArtifactIndex(projectRoot: string): Promise<BmadA
   const storyPaths: string[] = [];
   const sprintStatusPaths: string[] = [];
 
-  for (const fullPath of allKnownFiles) {
+  for (const fullPath of planningFiles) {
     const relPath = normalizedRelativePath(projectRoot, fullPath);
     const fileName = basename(fullPath);
 
     if (PRD_PATTERN.test(fileName)) prdPaths.push(relPath);
     if (UX_PATTERN.test(fileName)) uxPaths.push(relPath);
     if (ARCHITECTURE_PATTERN.test(fileName)) architecturePaths.push(relPath);
-    if (EPIC_PATTERN.test(fileName) || isPathInEpicsDir(relPath)) epicPaths.push(relPath);
+    if (EPIC_PATTERN.test(fileName)) epicPaths.push(relPath);
     if (STORY_PATTERN.test(fileName)) storyPaths.push(relPath);
+  }
+
+  for (const fullPath of implementationFiles) {
+    const relPath = normalizedRelativePath(projectRoot, fullPath);
+    const fileName = basename(fullPath);
     if (SPRINT_STATUS_PATTERN.test(fileName) || SPRINT_PLANNING_PATTERN.test(fileName)) sprintStatusPaths.push(relPath);
   }
 

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { recordStoryCompletion } from '../../integrations/bmad/writeback.js';
@@ -191,6 +191,77 @@ describe('BMAD autopilot campaign loop', () => {
       assert.equal(teamInvoked, true);
       assert.equal(result.status, 'completed');
       assert.equal(result.stopReason, 'campaign_complete');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('supports explicit BMAD-native backend selection through the compatibility executor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
+    try {
+      const storyPath = '_bmad-output/planning-artifacts/epics/story-login.md';
+      await createBmadProject(root, { stories: [storyPath] });
+      let nativeInvoked = false;
+
+      const result = await runBmadAutopilotCampaign({
+        task: 'ship the current BMAD story',
+        cwd: root,
+        backendSelection: {
+          allowNativeExecution: true,
+          nativeStoryPaths: [storyPath],
+        },
+        executors: {
+          async native(request) {
+            nativeInvoked = true;
+            await recordStoryCompletion(request.cwd, {
+              storyPath: request.handoff.storyPath,
+              completedAt: new Date().toISOString(),
+              mode: 'bmad-native',
+              verificationSummary: 'verified natively',
+            });
+            return { status: 'completed', backend: 'bmad-native' };
+          },
+        },
+      });
+
+      assert.equal(nativeInvoked, true);
+      assert.equal(result.status, 'completed');
+      const stage = result.stageResults['bmad-story-1'];
+      assert.equal((stage?.artifacts as Record<string, unknown>)?.backend, 'bmad-native');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes an epic retrospective hook when the epic is fully complete', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
+    try {
+      const epicPath = '_bmad-output/planning-artifacts/epics/epic-auth.md';
+      const storyPath = '_bmad-output/planning-artifacts/epics/story-epic-auth-login.md';
+      await createBmadProject(root, { stories: [storyPath] });
+      await writeFile(join(root, epicPath), '# Epic\n');
+
+      const result = await runBmadAutopilotCampaign({
+        task: 'ship the current BMAD story',
+        cwd: root,
+        executors: {
+          async ralph({ cwd, storyPath: selectedStory }) {
+            await recordStoryCompletion(cwd, {
+              storyPath: selectedStory,
+              completedAt: new Date().toISOString(),
+              mode: 'ralph',
+              verificationSummary: 'verified',
+            });
+            return { status: 'completed' };
+          },
+        },
+      });
+
+      assert.equal(result.status, 'completed');
+      const hookPath = (result.artifacts.bmadCampaign as { hook_artifact_paths?: string[] }).hook_artifact_paths?.[0];
+      assert.ok(hookPath);
+      const content = await readFile(join(root, hookPath!), 'utf-8');
+      assert.match(content, /Epic completed through ralph/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

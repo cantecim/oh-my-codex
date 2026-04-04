@@ -8,6 +8,7 @@ export type BmadPhase =
   | 'mixed';
 
 export type BmadDriftSeverity = 'none' | 'soft' | 'medium' | 'hard';
+export type BmadExecutionBackend = 'ralph' | 'team' | 'bmad-native';
 
 export interface BmadDetectionResult {
   detected: boolean;
@@ -92,6 +93,36 @@ export interface BmadExecutionContext {
   writebackBlockedByDrift: boolean;
 }
 
+export interface BmadWorkflowHandoff {
+  source: 'ralplan' | 'ralph' | 'team' | 'autopilot' | 'omx-native';
+  target: 'ralph' | 'team' | 'bmad-native';
+  storyPath: string | null;
+  epicPath: string | null;
+  projectContextPath: string | null;
+  architecturePaths: string[];
+  acceptanceCriteria: string[];
+  sprintStatusPath: string | null;
+  implementationArtifactsRoot: string | null;
+  driftStatus: BmadDriftSeverity;
+  writebackSupported: boolean;
+  contextBlockedByAmbiguity: boolean;
+}
+
+export interface BmadNativeExecutionRequest {
+  cwd: string;
+  task: string;
+  handoff: BmadWorkflowHandoff;
+  iteration: number;
+}
+
+export interface BmadNativeExecutionResult {
+  status: 'completed' | 'failed' | 'cancelled' | 'unsupported';
+  backend: BmadExecutionBackend;
+  handoffPath?: string;
+  artifactPaths?: string[];
+  error?: string;
+}
+
 export type BmadWritebackStatus = 'applied' | 'skipped' | 'unsupported' | 'conflict';
 
 export interface BmadWritebackResult {
@@ -99,6 +130,23 @@ export interface BmadWritebackResult {
   target: 'story' | 'sprint-status' | 'implementation-artifact';
   path: string | null;
   reason?: string;
+}
+
+export interface BmadRetrospectiveHookResult {
+  status: BmadWritebackStatus;
+  target: 'story-hook' | 'epic-hook';
+  path: string | null;
+  reason?: string;
+}
+
+export interface BmadDriftRecoveryResult {
+  attempted: boolean;
+  allowedRetry: boolean;
+  recovered: boolean;
+  driftStatus: BmadDriftSeverity;
+  activeStoryPath: string | null;
+  sprintStatusPath: string | null;
+  reason: string;
 }
 
 export interface BmadReconcileLogEntry {

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
-import type { BmadWritebackResult } from './contracts.js';
+import type { BmadExecutionBackend, BmadWritebackResult } from './contracts.js';
 
 const STORY_BLOCK_START = '<!-- OMX:BMAD:STORY-COMPLETION:START -->';
 const STORY_BLOCK_END = '<!-- OMX:BMAD:STORY-COMPLETION:END -->';
@@ -24,7 +24,7 @@ function replaceDelimitedBlock(content: string, start: string, end: string, next
 
 function buildStoryCompletionBlock(params: {
   completedAt: string;
-  mode: 'ralph' | 'team';
+  mode: BmadExecutionBackend;
   verificationSummary: string;
   implementationArtifactPaths: string[];
   reviewOutcomeSummary?: string;
@@ -52,6 +52,7 @@ function buildImplementationArtifactContents(params: {
   verificationSummary: string;
   reviewOutcomeSummary?: string;
   changedFiles?: string[];
+  backend?: BmadExecutionBackend;
 }): string {
   const lines = [
     '# OMX Implementation Summary',
@@ -60,6 +61,9 @@ function buildImplementationArtifactContents(params: {
     `- Epic: ${params.epicPath ?? 'none'}`,
     `- Verification: ${params.verificationSummary}`,
   ];
+  if (params.backend) {
+    lines.push(`- Backend: ${params.backend}`);
+  }
   if (params.reviewOutcomeSummary) {
     lines.push(`- Review: ${params.reviewOutcomeSummary}`);
   }
@@ -92,7 +96,7 @@ export async function recordStoryCompletion(
   params: {
     storyPath: string | null;
     completedAt: string;
-    mode: 'ralph' | 'team';
+    mode: BmadExecutionBackend;
     verificationSummary: string;
     implementationArtifactPaths?: string[];
     reviewOutcomeSummary?: string;
@@ -176,7 +180,9 @@ export async function recordImplementationArtifactSummary(
     verificationSummary: string;
     reviewOutcomeSummary?: string;
     changedFiles?: string[];
-    kind?: 'story-run' | 'verification';
+    kind?: 'story-run' | 'verification' | 'story-hook' | 'retrospective';
+    backend?: BmadExecutionBackend;
+    fileNameOverride?: string;
   },
 ): Promise<BmadWritebackResult> {
   if (!params.implementationArtifactsRoot) {
@@ -188,9 +194,13 @@ export async function recordImplementationArtifactSummary(
   const storyRef = params.storyPath;
   const slug = storySlug(storyRef);
   const kind = params.kind ?? 'story-run';
-  const fileName = kind === 'verification'
+  const fileName = params.fileNameOverride ?? (kind === 'verification'
     ? `omx-verification-${slug}.md`
-    : `omx-story-run-${slug}.md`;
+    : kind === 'story-hook'
+      ? `omx-story-hook-${slug}.md`
+      : kind === 'retrospective'
+        ? `omx-retrospective-${slug}.md`
+        : `omx-story-run-${slug}.md`);
   const relativePath = join(params.implementationArtifactsRoot, fileName).replace(/\\/g, '/');
   const fullPath = join(projectRoot, relativePath);
   await mkdir(join(projectRoot, params.implementationArtifactsRoot), { recursive: true });
@@ -200,6 +210,7 @@ export async function recordImplementationArtifactSummary(
     verificationSummary: params.verificationSummary,
     reviewOutcomeSummary: params.reviewOutcomeSummary,
     changedFiles: params.changedFiles,
+    backend: params.backend,
   }), 'utf-8');
   return { status: 'applied', target: 'implementation-artifact', path: relativePath };
 }

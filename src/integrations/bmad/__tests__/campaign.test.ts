@@ -179,4 +179,26 @@ describe('BMAD campaign resolution', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('supports explicit BMAD-native backend selection only when allowed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-bmad-campaign-'));
+    try {
+      const story = '_bmad-output/planning-artifacts/epics/story-login.md';
+      await createProjectFiles(root, [story]);
+      const result = await resolveNextBmadStory(root, {
+        index: makeIndex(root),
+        state: makeState(),
+        context: makeContext(),
+        backendSelection: {
+          allowNativeExecution: true,
+          nativeStoryPaths: [story],
+        },
+      });
+
+      assert.equal(result.status, 'resolved');
+      assert.equal(result.backend, 'bmad-native');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

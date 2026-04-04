@@ -49,6 +49,7 @@ Complex tasks often fail silently: partial implementations get declared "done", 
   - story artifact completion block
   - sprint-status update when conservative mapping is possible
   - implementation summaries under `_bmad-output/implementation-artifacts/`
+- Ralph may also emit implementation-side story hook summaries under `_bmad-output/implementation-artifacts/`; these are evidence artifacts, not planning-authority mutations.
 - Never mutate BMAD PRD, UX, architecture, or `project-context.md`.
 </Execution_Policy>
 
@@ -114,6 +115,7 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 9. **On rejection**: Fix the issues raised, then re-verify at the same tier
 10. **BMAD completion writeback (when supported)**:
    - After successful completion, perform bounded BMAD writeback for the current story only
+   - Implementation-side hook artifacts may be written alongside normal BMAD completion writeback
    - Treat writeback drift/ambiguity as a stop condition for BMAD-side completion, not as permission to rewrite broader BMAD artifacts
 </Steps>
 

@@ -2,11 +2,10 @@ import { basename } from 'node:path';
 import type {
   BmadArtifactIndex,
   BmadExecutionContext,
+  BmadExecutionBackend,
   BmadPersistedState,
 } from './contracts.js';
 import { isBmadStoryComplete } from './progress.js';
-
-export type BmadExecutionBackend = 'ralph' | 'team';
 
 export type BmadCampaignStopReason =
   | 'planning_required'
@@ -48,7 +47,11 @@ export interface BmadNextStoryResult {
 }
 
 export interface BmadBackendSelectionOptions {
+  preferredBackend?: BmadExecutionBackend;
+  storyBackendByPath?: Readonly<Record<string, BmadExecutionBackend>>;
   teamStoryPaths?: readonly string[];
+  nativeStoryPaths?: readonly string[];
+  allowNativeExecution?: boolean;
 }
 
 function inferEpicForStory(
@@ -80,6 +83,16 @@ export function selectBmadExecutionBackend(
   storyPath: string,
   options: BmadBackendSelectionOptions = {},
 ): BmadExecutionBackend {
+  if (options.preferredBackend) {
+    return options.preferredBackend;
+  }
+  const explicit = options.storyBackendByPath?.[storyPath];
+  if (explicit) {
+    return explicit;
+  }
+  if (options.allowNativeExecution && options.nativeStoryPaths?.includes(storyPath)) {
+    return 'bmad-native';
+  }
   return options.teamStoryPaths?.includes(storyPath) ? 'team' : 'ralph';
 }
 

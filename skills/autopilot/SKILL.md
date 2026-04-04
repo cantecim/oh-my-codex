@@ -47,8 +47,10 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 - If BMAD is detected, run the BMAD routing gate before entering the standard non-BMAD phase stack; do not start expansion/planning-heavy authoring first and "switch later."
 - In BMAD campaign mode, execute one story at a time by default.
 - In BMAD campaign mode, default backend is `$ralph`; use `$team` only when parallel execution is explicitly selected or when explicit runtime configuration/metadata marks it safe.
+- In BMAD campaign mode, `bmad-native` execution is an explicit compatibility backend, not the default path; it must be selected by runtime configuration/metadata and still runs under OMX orchestration.
 - In BMAD campaign mode, never guess the active story when multiple candidates remain unresolved; stop and report ambiguity instead.
 - In BMAD campaign mode, do not write BMAD story/sprint artifacts directly; delegate bounded writeback to `$ralph` or `$team`, then re-read BMAD artifacts to confirm completion.
+- In BMAD campaign mode, implementation-side hooks may write OMX-authored story/epic summaries under `_bmad-output/implementation-artifacts/`; these enrich evidence but do not replace BMAD delivery truth.
 </Execution_Policy>
 
 <Steps>
@@ -104,10 +106,12 @@ Most non-trivial software tasks require coordinated phases: understanding requir
      2. Resolve the next story conservatively
      3. If ambiguous, stop with an explicit ambiguity result
      4. Select backend (`$ralph` by default, `$team` only when explicitly enabled by runtime configuration/metadata)
+        - `bmad-native` is a compatibility backend used only when explicitly selected
      5. Execute exactly one story
      6. Reconcile BMAD state again
      7. Confirm completion from BMAD-side artifacts
-     8. Continue to the next story only when completion is confirmed
+     8. Emit implementation-side hook artifacts when story/epic completion is confirmed
+     9. Continue to the next story only when completion is confirmed
 
 4. **Phase 3 - QA**:
    - Non-BMAD path: cycle until all tests pass (UltraQA mode)
@@ -170,6 +174,11 @@ Use `omx_state` MCP tools for autopilot lifecycle state.
   - `bmad_context_blocked_by_ambiguity`
   - `bmad_writeback_blocked`
   - `bmad_campaign_iteration`
+  - `bmad_execution_family`
+  - `bmad_drift_recovery_attempted`
+  - `bmad_drift_recovery_succeeded`
+  - `bmad_drift_recovery_reason`
+  - `bmad_last_hook_artifact_paths`
 
   These are OMX runtime/projection fields. They do not replace BMAD artifact authority.
 - **On completion**:

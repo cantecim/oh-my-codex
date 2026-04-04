@@ -4,6 +4,7 @@ import { detectBmadProject } from '../integrations/bmad/discovery.js';
 import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
 import { deriveBmadReadiness } from '../integrations/bmad/readiness.js';
 import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
+import { buildBmadWorkflowHandoff } from '../integrations/bmad/handoff.js';
 
 export const RALPLAN_ACTIVE_PHASES = [
   'draft',
@@ -161,6 +162,28 @@ export async function runRalplanConsensus(
             : readiness.gaps[0] === 'missing_story_or_sprint'
               ? 'create-epics-and-stories'
               : 'manual-bmad-resolution',
+      handoff: readiness.readyForExecution
+        ? {
+          ralph: buildBmadWorkflowHandoff({
+            source: 'ralplan',
+            target: 'ralph',
+            context,
+            driftStatus: bmad.state.driftStatus,
+          }),
+          team: buildBmadWorkflowHandoff({
+            source: 'ralplan',
+            target: 'team',
+            context,
+            driftStatus: bmad.state.driftStatus,
+          }),
+          native: buildBmadWorkflowHandoff({
+            source: 'ralplan',
+            target: 'bmad-native',
+            context,
+            driftStatus: bmad.state.driftStatus,
+          }),
+        }
+        : null,
     };
     await updateRalplanState(cwd, {
       bmad_detected: true,

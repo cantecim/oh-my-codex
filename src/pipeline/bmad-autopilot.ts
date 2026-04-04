@@ -2,6 +2,10 @@ import { readModeState, startMode, updateModeState } from '../modes/base.js';
 import { detectBmadProject } from '../integrations/bmad/discovery.js';
 import { deriveBmadReadiness } from '../integrations/bmad/readiness.js';
 import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
+import { buildBmadWorkflowHandoff } from '../integrations/bmad/handoff.js';
+import { recordBmadEpicRetrospectiveHook } from '../integrations/bmad/hooks.js';
+import { runBmadNativeExecution } from '../integrations/bmad/native-execution.js';
+import { attemptBmadDriftRecovery } from '../integrations/bmad/recovery.js';
 import {
   persistBmadActiveSelection,
   reconcileBmadIntegrationState,
@@ -10,11 +14,19 @@ import {
   resolveNextBmadStory,
   type BmadBackendSelectionOptions,
   type BmadCampaignStopReason,
-  type BmadExecutionBackend,
 } from '../integrations/bmad/campaign.js';
 import { buildAutopilotBmadStateFields } from '../integrations/bmad/autopilot-state.js';
-import { isBmadStoryComplete } from '../integrations/bmad/progress.js';
+import {
+  inferEpicCompletion,
+  inferEpicStoryPaths,
+  isBmadStoryComplete,
+} from '../integrations/bmad/progress.js';
 import { ralphCommand } from '../cli/ralph.js';
+import type {
+  BmadExecutionBackend,
+  BmadNativeExecutionRequest,
+  BmadNativeExecutionResult,
+} from '../integrations/bmad/contracts.js';
 import type { PipelineConfig, PipelineResult, PipelineStage } from './types.js';
 import { createAutopilotPipelineConfig, runPipeline } from './orchestrator.js';
 
@@ -25,8 +37,9 @@ export type BmadPlanningRecommendation =
   | 'manual-bmad-resolution';
 
 export interface BmadAutopilotExecutorResult {
-  status: 'completed' | 'failed' | 'cancelled';
+  status: 'completed' | 'failed' | 'cancelled' | 'unsupported';
   error?: string;
+  artifacts?: Record<string, unknown>;
 }
 
 export interface BmadAutopilotExecutors {
@@ -44,6 +57,7 @@ export interface BmadAutopilotExecutors {
     epicPath: string | null;
     iteration: number;
   }) => Promise<BmadAutopilotExecutorResult>;
+  native?: (request: BmadNativeExecutionRequest) => Promise<BmadNativeExecutionResult>;
 }
 
 export interface RunBmadAutopilotCampaignOptions {
@@ -116,6 +130,7 @@ async function invokeBackend(
     epicPath: string | null;
     iteration: number;
     executors?: BmadAutopilotExecutors;
+    handoff: ReturnType<typeof buildBmadWorkflowHandoff>;
   },
 ): Promise<BmadAutopilotExecutorResult> {
   if (backend === 'ralph') {
@@ -132,19 +147,36 @@ async function invokeBackend(
     });
   }
 
-  if (!options.executors?.team) {
-    return {
-      status: 'failed',
-      error: 'team_backend_requires_explicit_executor',
-    };
+  if (backend === 'team') {
+    if (!options.executors?.team) {
+      return {
+        status: 'failed',
+        error: 'team_backend_requires_explicit_executor',
+      };
+    }
+    return options.executors.team({
+      cwd: options.cwd,
+      task: options.task,
+      storyPath: options.storyPath,
+      epicPath: options.epicPath,
+      iteration: options.iteration,
+    });
   }
-  return options.executors.team({
+
+  const nativeResult = await runBmadNativeExecution({
     cwd: options.cwd,
     task: options.task,
-    storyPath: options.storyPath,
-    epicPath: options.epicPath,
+    handoff: options.handoff,
     iteration: options.iteration,
-  });
+  }, options.executors?.native);
+  return {
+    status: nativeResult.status === 'unsupported' ? 'unsupported' : nativeResult.status,
+    error: nativeResult.error,
+    artifacts: {
+      native_handoff_path: nativeResult.handoffPath ?? null,
+      native_artifact_paths: nativeResult.artifactPaths ?? [],
+    },
+  };
 }
 
 export async function runBmadAutopilotCampaign(
@@ -194,6 +226,7 @@ export async function runBmadAutopilotCampaign(
         bmad_context_blocked_by_ambiguity: initialContext.contextBlockedByAmbiguity,
         bmad_writeback_blocked: initialContext.writebackBlockedByDrift,
         bmad_campaign_iteration: 0,
+        bmad_execution_family: null,
       }),
     }, cwd);
 
@@ -219,6 +252,7 @@ export async function runBmadAutopilotCampaign(
 
   const stageResults: Record<string, { status: 'completed' | 'failed' | 'skipped'; artifacts: Record<string, unknown>; duration_ms: number; error?: string }> = {};
   const completedStoryPaths: string[] = [];
+  const hookArtifactPaths: string[] = [];
   let remainingStoryPaths = [...reconciled.artifactIndex.storyPaths];
   let stopReason: BmadCampaignStopReason | null = null;
 
@@ -252,6 +286,7 @@ export async function runBmadAutopilotCampaign(
           bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity,
           bmad_writeback_blocked: beforeContext.writebackBlockedByDrift,
           bmad_campaign_iteration: iteration - 1,
+          bmad_last_hook_artifact_paths: hookArtifactPaths,
         }),
       }, cwd);
       break;
@@ -274,6 +309,7 @@ export async function runBmadAutopilotCampaign(
           bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity || stopReason === 'ambiguous_active_story',
           bmad_writeback_blocked: beforeContext.writebackBlockedByDrift,
           bmad_campaign_iteration: iteration,
+          bmad_last_hook_artifact_paths: hookArtifactPaths,
         }),
       }, cwd);
       break;
@@ -299,10 +335,20 @@ export async function runBmadAutopilotCampaign(
         bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity,
         bmad_writeback_blocked: beforeContext.writebackBlockedByDrift,
         bmad_campaign_iteration: iteration,
+        bmad_execution_family: nextStory.backend === 'bmad-native' ? 'bmad-native' : 'omx-native',
+        bmad_last_hook_artifact_paths: hookArtifactPaths,
       }),
     }, cwd);
 
     const stageKey = `bmad-story-${iteration}`;
+    const handoff = buildBmadWorkflowHandoff({
+      source: 'autopilot',
+      target: nextStory.backend,
+      context: beforeContext,
+      driftStatus: before.state.driftStatus,
+      storyPath: nextStory.storyPath,
+      epicPath: nextStory.epicPath,
+    });
     const execution = await invokeBackend(nextStory.backend, {
       cwd,
       task: options.task,
@@ -310,6 +356,7 @@ export async function runBmadAutopilotCampaign(
       epicPath: nextStory.epicPath,
       iteration,
       executors: options.executors,
+      handoff,
     });
     stageResults[stageKey] = {
       status: execution.status === 'completed' ? 'completed' : 'failed',
@@ -317,6 +364,11 @@ export async function runBmadAutopilotCampaign(
         story_path: nextStory.storyPath,
         epic_path: nextStory.epicPath,
         backend: nextStory.backend,
+        completion_confirmed: false,
+        writeback_blocked: beforeContext.writebackBlockedByDrift,
+        drift_status: before.state.driftStatus,
+        handoff,
+        ...(execution.artifacts ?? {}),
       },
       duration_ms: 0,
       error: execution.error,
@@ -342,12 +394,15 @@ export async function runBmadAutopilotCampaign(
           bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity,
           bmad_writeback_blocked: beforeContext.writebackBlockedByDrift,
           bmad_campaign_iteration: iteration,
+          bmad_execution_family: nextStory.backend === 'bmad-native' ? 'bmad-native' : 'omx-native',
+          bmad_last_hook_artifact_paths: hookArtifactPaths,
         }),
       }, cwd);
       break;
     }
-    if (execution.status === 'failed') {
+    if (execution.status === 'failed' || execution.status === 'unsupported') {
       stopReason = execution.error === 'team_backend_requires_explicit_executor'
+        || execution.error === 'bmad_native_executor_not_configured'
         ? 'backend_unsupported'
         : 'backend_failed';
       await updateModeState('autopilot', {
@@ -369,6 +424,8 @@ export async function runBmadAutopilotCampaign(
           bmad_context_blocked_by_ambiguity: beforeContext.contextBlockedByAmbiguity,
           bmad_writeback_blocked: beforeContext.writebackBlockedByDrift,
           bmad_campaign_iteration: iteration,
+          bmad_execution_family: nextStory.backend === 'bmad-native' ? 'bmad-native' : 'omx-native',
+          bmad_last_hook_artifact_paths: hookArtifactPaths,
         }),
       }, cwd);
       break;
@@ -382,13 +439,40 @@ export async function runBmadAutopilotCampaign(
     });
 
     if (completion.complete) {
+      stageResults[stageKey].artifacts.completion_confirmed = true;
       if (!completedStoryPaths.includes(nextStory.storyPath)) {
         completedStoryPaths.push(nextStory.storyPath);
+      }
+      if (nextStory.epicPath) {
+        const epicStoryPaths = inferEpicStoryPaths(after.artifactIndex, nextStory.epicPath);
+        const epicStatus = await inferEpicCompletion(cwd, {
+          epicPath: nextStory.epicPath,
+          epicStoryPaths,
+          sprintStatusPath: afterContext.sprintStatusPath,
+        });
+        if (epicStatus === 'complete') {
+          const hook = await recordBmadEpicRetrospectiveHook(cwd, {
+            implementationArtifactsRoot: afterContext.implementationArtifactsRoot,
+            epicPath: nextStory.epicPath,
+            completedStoryPaths: epicStoryPaths,
+            backend: nextStory.backend,
+            summary: `Epic completed through ${nextStory.backend} after ${iteration} campaign iteration(s).`,
+          });
+          if (hook.path) {
+            hookArtifactPaths.push(hook.path);
+          }
+        }
       }
       remainingStoryPaths = after.artifactIndex.storyPaths.filter((storyPath) => !completedStoryPaths.includes(storyPath));
       continue;
     }
 
+    const recovery = await attemptBmadDriftRecovery(cwd, {
+      index: after.artifactIndex,
+      state: after.state,
+      context: afterContext,
+      storyPath: nextStory.storyPath,
+    });
     const nextAfter = await resolveNextBmadStory(cwd, {
       index: after.artifactIndex,
       state: after.state,
@@ -400,7 +484,8 @@ export async function runBmadAutopilotCampaign(
       && after.artifactIndex.artifactIndexVersion !== before.artifactIndex.artifactIndexVersion
       && nextAfter.status === 'resolved'
       && nextAfter.storyPath === nextStory.storyPath;
-    if (canRetryOnce) {
+    const canRecoverRetry = recovery.allowedRetry && afterContext.writebackBlockedByDrift !== true;
+    if (canRetryOnce || canRecoverRetry) {
       const retry = await invokeBackend(nextStory.backend, {
         cwd,
         task: options.task,
@@ -408,23 +493,38 @@ export async function runBmadAutopilotCampaign(
         epicPath: nextStory.epicPath,
         iteration,
         executors: options.executors,
+        handoff: buildBmadWorkflowHandoff({
+          source: 'autopilot',
+          target: nextStory.backend,
+          context: afterContext,
+          driftStatus: after.state.driftStatus,
+          storyPath: nextStory.storyPath,
+          epicPath: nextStory.epicPath,
+        }),
       });
       if (retry.status === 'completed') {
+        const afterRetry = await reconcileBmadIntegrationState(cwd);
+        const retryContext = await resolveBmadExecutionContext(cwd, afterRetry.artifactIndex, afterRetry.state);
         const confirmed = await isBmadStoryComplete(cwd, {
           storyPath: nextStory.storyPath,
-          sprintStatusPath: afterContext.sprintStatusPath,
+          sprintStatusPath: retryContext.sprintStatusPath,
         });
         if (confirmed.complete) {
+          stageResults[stageKey].artifacts.completion_confirmed = true;
           if (!completedStoryPaths.includes(nextStory.storyPath)) {
             completedStoryPaths.push(nextStory.storyPath);
           }
-          remainingStoryPaths = after.artifactIndex.storyPaths.filter((storyPath) => !completedStoryPaths.includes(storyPath));
+          remainingStoryPaths = afterRetry.artifactIndex.storyPaths.filter((storyPath) => !completedStoryPaths.includes(storyPath));
           continue;
         }
       }
     }
 
-    stopReason = afterContext.writebackBlockedByDrift ? 'writeback_blocked' : 'story_not_completed_after_execution';
+    stopReason = after.state.driftStatus === 'hard'
+      ? 'hard_drift'
+      : afterContext.writebackBlockedByDrift
+        ? 'writeback_blocked'
+        : 'story_not_completed_after_execution';
     await updateModeState('autopilot', {
       active: false,
       current_phase: 'blocked',
@@ -443,6 +543,11 @@ export async function runBmadAutopilotCampaign(
         bmad_context_blocked_by_ambiguity: afterContext.contextBlockedByAmbiguity,
         bmad_writeback_blocked: afterContext.writebackBlockedByDrift,
         bmad_campaign_iteration: iteration,
+        bmad_execution_family: nextStory.backend === 'bmad-native' ? 'bmad-native' : 'omx-native',
+        bmad_drift_recovery_attempted: recovery.attempted,
+        bmad_drift_recovery_succeeded: recovery.recovered,
+        bmad_drift_recovery_reason: recovery.reason,
+        bmad_last_hook_artifact_paths: hookArtifactPaths,
       }),
     }, cwd);
     break;
@@ -470,6 +575,7 @@ export async function runBmadAutopilotCampaign(
         stop_reason: stopReason,
         total_iterations: Object.keys(stageResults).length,
         backlog_exhausted: remainingStoryPaths.length === 0,
+        hook_artifact_paths: hookArtifactPaths,
       },
     },
     stopReason,

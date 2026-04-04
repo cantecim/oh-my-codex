@@ -2167,6 +2167,9 @@ async function postLaunch(
       ralphState?.bmad_writeback_blocked !== true
     ) {
       const {
+        recordBmadStoryHook,
+      } = await import("../integrations/bmad/hooks.js");
+      const {
         recordImplementationArtifactSummary,
         recordSprintStatusUpdate,
         recordStoryCompletion,
@@ -2218,6 +2221,15 @@ async function postLaunch(
         verificationSummary,
         implementationArtifactPaths,
         reviewOutcomeSummary: reviewSummary,
+      });
+      await recordBmadStoryHook(cwd, {
+        implementationArtifactsRoot: typeof ralphState.bmad_implementation_artifacts_root === "string" ? ralphState.bmad_implementation_artifacts_root : null,
+        storyPath: typeof ralphState.bmad_story_path === "string" ? ralphState.bmad_story_path : null,
+        epicPath: typeof ralphState.bmad_epic_path === "string" ? ralphState.bmad_epic_path : null,
+        backend: "ralph",
+        verificationSummary,
+        reviewOutcomeSummary: reviewSummary,
+        changedFiles,
       });
       await recordSprintStatusUpdate(cwd, {
         sprintStatusPath: typeof ralphState.bmad_sprint_status_path === "string" ? ralphState.bmad_sprint_status_path : null,

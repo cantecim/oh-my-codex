@@ -88,7 +88,7 @@ When BMAD is detected:
   - recommend the missing BMAD workflow category next
   - do not synthesize BMAD PRD / architecture / story authoring directly inside Ralplan
 - if BMAD planning is sufficient:
-  - produce an execution handoff context for `$ralph`, `$team`, and later `$autopilot`
+- produce an execution handoff context for `$ralph`, `$team`, `$autopilot`, and explicit `bmad-native` compatibility backends when enabled
 - in BMAD mode, Ralplan is a gate and handoff planner first, not a replacement for BMAD’s menu-driven authoring workflows
 
 > **Important:** Steps 3 and 4 MUST run sequentially. Do NOT issue both agent calls in the same parallel batch. Always await the Architect result before invoking Critic.

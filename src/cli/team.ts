@@ -13,6 +13,7 @@ import { readApprovedExecutionLaunchHint } from '../planning/artifacts.js';
 import { detectBmadProject } from '../integrations/bmad/discovery.js';
 import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
 import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
+import { recordBmadStoryHook } from '../integrations/bmad/hooks.js';
 import {
   recordImplementationArtifactSummary,
   recordSprintStatusUpdate,
@@ -2429,6 +2430,14 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
           mode: 'team',
           verificationSummary,
           implementationArtifactPaths,
+          reviewOutcomeSummary: reviewSummary || undefined,
+        }).catch(() => {});
+        await recordBmadStoryHook(cwd, {
+          implementationArtifactsRoot: bmadContext.implementationArtifactsRoot,
+          storyPath: bmadContext.activeStoryPath,
+          epicPath: bmadContext.activeEpicPath,
+          backend: 'team',
+          verificationSummary,
           reviewOutcomeSummary: reviewSummary || undefined,
         }).catch(() => {});
         await recordSprintStatusUpdate(cwd, {

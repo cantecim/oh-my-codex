@@ -158,11 +158,11 @@ describe('autopilot skill/runtime bridge', () => {
       });
 
       assert.equal(result.status, 'failed');
-      assert.equal('stopReason' in result ? result.stopReason : undefined, 'writeback_blocked');
+      assert.equal('stopReason' in result ? result.stopReason : undefined, 'hard_drift');
 
       const rawState = JSON.parse(await readFile(join(root, '.omx', 'state', 'autopilot-state.json'), 'utf-8')) as Record<string, unknown>;
       assert.equal(rawState.current_phase, 'blocked');
-      assert.equal(rawState.bmad_writeback_blocked, true);
+      assert.equal(rawState.bmad_stop_reason, 'hard_drift');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

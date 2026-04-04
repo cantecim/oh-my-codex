@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
+import type { BmadArtifactIndex } from './contracts.js';
 
 const STORY_COMPLETION_MARKER = '<!-- OMX:BMAD:STORY-COMPLETION:START -->';
 const COMPLETED_STATUSES = new Set(['complete', 'completed', 'done']);
@@ -108,4 +109,24 @@ export async function inferEpicCompletion(
   }
 
   return hasIncomplete ? 'incomplete' : 'complete';
+}
+
+export function inferEpicStoryPaths(
+  index: Pick<BmadArtifactIndex, 'storyPaths'>,
+  epicPath: string | null,
+): string[] {
+  if (!epicPath) return [];
+  const epicTokens = basename(epicPath)
+    .toLowerCase()
+    .replace(/^epic[-_.]*/u, '')
+    .split(/[^a-z0-9]+/u)
+    .filter(Boolean);
+  if (epicTokens.length === 0) return [];
+  return index.storyPaths.filter((storyPath) => {
+    const storyTokens = basename(storyPath)
+      .toLowerCase()
+      .split(/[^a-z0-9]+/u)
+      .filter(Boolean);
+    return epicTokens.every((token) => storyTokens.includes(token));
+  });
 }

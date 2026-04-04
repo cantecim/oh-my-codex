@@ -195,6 +195,7 @@ When BMAD is active:
   - story completion block
   - sprint-status update when conservative mapping succeeds
   - OMX implementation summaries under `_bmad-output/implementation-artifacts/`
+  - OMX implementation-side story hook summaries under `_bmad-output/implementation-artifacts/`
 - if BMAD story context is ambiguous, surface that ambiguity in leader-visible state instead of assigning different guesses to workers
 
 ### Team worker model + thinking resolution (current contract)

@@ -1,5 +1,5 @@
-import type { BmadCampaignStopReason, BmadExecutionBackend } from './campaign.js';
-import type { BmadPhase } from './contracts.js';
+import type { BmadCampaignStopReason } from './campaign.js';
+import type { BmadExecutionBackend, BmadPhase } from './contracts.js';
 
 export interface AutopilotBmadStateFields {
   bmad_detected: boolean;
@@ -16,6 +16,11 @@ export interface AutopilotBmadStateFields {
   bmad_context_blocked_by_ambiguity?: boolean;
   bmad_writeback_blocked?: boolean;
   bmad_campaign_iteration?: number;
+  bmad_execution_family?: 'omx-native' | 'bmad-native' | null;
+  bmad_drift_recovery_attempted?: boolean;
+  bmad_drift_recovery_succeeded?: boolean;
+  bmad_drift_recovery_reason?: string | null;
+  bmad_last_hook_artifact_paths?: string[];
 }
 
 export function buildAutopilotBmadStateFields(
@@ -36,5 +41,10 @@ export function buildAutopilotBmadStateFields(
     bmad_context_blocked_by_ambiguity: fields.bmad_context_blocked_by_ambiguity ?? false,
     bmad_writeback_blocked: fields.bmad_writeback_blocked ?? false,
     bmad_campaign_iteration: fields.bmad_campaign_iteration ?? 0,
+    bmad_execution_family: fields.bmad_execution_family ?? null,
+    bmad_drift_recovery_attempted: fields.bmad_drift_recovery_attempted ?? false,
+    bmad_drift_recovery_succeeded: fields.bmad_drift_recovery_succeeded ?? false,
+    bmad_drift_recovery_reason: fields.bmad_drift_recovery_reason ?? null,
+    bmad_last_hook_artifact_paths: fields.bmad_last_hook_artifact_paths ?? [],
   };
 }

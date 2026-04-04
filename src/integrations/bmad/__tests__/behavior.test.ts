@@ -11,6 +11,7 @@ import {
   recordSprintStatusUpdate,
   recordStoryCompletion,
 } from '../writeback.js';
+import { recordBmadEpicRetrospectiveHook, recordBmadStoryHook } from '../hooks.js';
 
 function baseIndex(root: string): BmadArtifactIndex {
   return {
@@ -156,6 +157,51 @@ describe('BMAD writeback helpers', () => {
       });
       assert.equal(result.status, 'applied');
       assert.equal(result.path, '_bmad-output/implementation-artifacts/omx-verification-story-login.md');
+      const content = await readFile(join(root, result.path!), 'utf-8');
+      assert.match(content, /# OMX Implementation Summary/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('includes backend provenance in implementation artifact summaries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-bmad-writeback-'));
+    try {
+      const result = await recordImplementationArtifactSummary(root, {
+        implementationArtifactsRoot: '_bmad-output/implementation-artifacts',
+        storyPath: '_bmad-output/planning-artifacts/epics/story-login.md',
+        epicPath: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+        verificationSummary: 'tests passed',
+        backend: 'bmad-native',
+      });
+      const content = await readFile(join(root, result.path!), 'utf-8');
+      assert.match(content, /- Backend: bmad-native/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes implementation-side story and epic hook artifacts only', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-bmad-hooks-'));
+    try {
+      const storyHook = await recordBmadStoryHook(root, {
+        implementationArtifactsRoot: '_bmad-output/implementation-artifacts',
+        storyPath: '_bmad-output/planning-artifacts/epics/story-login.md',
+        epicPath: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+        backend: 'ralph',
+        verificationSummary: 'ok',
+      });
+      const epicHook = await recordBmadEpicRetrospectiveHook(root, {
+        implementationArtifactsRoot: '_bmad-output/implementation-artifacts',
+        epicPath: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+        completedStoryPaths: ['_bmad-output/planning-artifacts/epics/story-login.md'],
+        backend: 'ralph',
+        summary: 'epic done',
+      });
+      assert.equal(storyHook.status, 'applied');
+      assert.equal(epicHook.status, 'applied');
+      assert.match(storyHook.path!, /omx-story-hook-story-login\.md$/);
+      assert.match(epicHook.path!, /omx-retrospective-epic-auth\.md$/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
