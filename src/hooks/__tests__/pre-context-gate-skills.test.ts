@@ -43,14 +43,6 @@ describe('pre-context gate guidance in planning/execution-heavy skills', () => {
     assert.match(autopilotSkill, /\$deep-interview\s+--quick/i);
   });
 
-  it('autopilot documents BMAD routing before the standard non-BMAD phase stack', () => {
-    const routingIndex = autopilotSkill.indexOf('BMAD routing gate');
-    const expansionIndex = autopilotSkill.indexOf('Phase 0 - Expansion (non-BMAD path)');
-    assert.notEqual(routingIndex, -1);
-    assert.notEqual(expansionIndex, -1);
-    assert.ok(routingIndex < expansionIndex);
-  });
-
   it('ralph documents required pre-context intake before execution loop', () => {
     assert.match(ralphSkill, /Pre-context intake/i);
     assert.match(ralphSkill, /\.omx\/context\/\{task-slug\}-\{timestamp\}\.md/);

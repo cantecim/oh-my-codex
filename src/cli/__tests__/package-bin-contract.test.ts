@@ -1,10 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 
 type PackageJson = {
   files?: string[];
@@ -55,14 +54,9 @@ describe('package bin contract', () => {
 
     rmSync(packagedSparkShellPath, { force: true });
 
-    const npmCacheDir = mkdtempSync(join(tmpdir(), 'omx-npm-cache-'));
     const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
       cwd: process.cwd(),
       encoding: 'utf-8',
-      env: {
-        ...process.env,
-        npm_config_cache: npmCacheDir,
-      },
     });
 
     assert.equal(packed.status, 0, packed.stderr || packed.stdout);

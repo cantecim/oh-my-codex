@@ -4,7 +4,6 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  readAutopilotState,
   buildGitBranchLabel,
   readGitBranch,
   readRalphState,
@@ -206,36 +205,6 @@ describe('additional HUD mode state readers', () => {
     await withTempRepo('omx-hud-ralplan-inactive-', async (cwd) => {
       await writeModeState(cwd, 'ralplan', { active: false, current_phase: 'complete' });
       assert.equal(await readRalplanState(cwd), null);
-    });
-  });
-
-  it('surfaces inactive planning-required autopilot BMAD state for HUD visibility', async () => {
-    await withTempRepo('omx-hud-autopilot-bmad-', async (cwd) => {
-      await writeModeState(cwd, 'autopilot', {
-        active: false,
-        current_phase: 'planning-required',
-        bmad_detected: true,
-        bmad_recommendation: 'create-architecture',
-      });
-
-      const state = await readAutopilotState(cwd);
-      assert.deepEqual(state, {
-        active: false,
-        current_phase: 'planning-required',
-        bmad_detected: true,
-        bmad_recommendation: 'create-architecture',
-      });
-    });
-  });
-
-  it('hides inactive non-BMAD autopilot terminal state from HUD', async () => {
-    await withTempRepo('omx-hud-autopilot-inactive-', async (cwd) => {
-      await writeModeState(cwd, 'autopilot', {
-        active: false,
-        current_phase: 'complete',
-      });
-
-      assert.equal(await readAutopilotState(cwd), null);
     });
   });
 

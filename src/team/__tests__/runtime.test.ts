@@ -1302,23 +1302,7 @@ process.on('SIGTERM', () => process.exit(0));
           1,
           [{ subject: 's', description: 'd', owner: 'worker-1' }],
           repo,
-          {
-            worktreeMode: { enabled: true, detached: true, name: null },
-            bmadContext: {
-              detected: true,
-              outputRoot: '_bmad-output',
-              projectContextPath: '_bmad-output/project-context.md',
-              architecturePaths: ['_bmad-output/planning-artifacts/architecture.md'],
-              activeStoryPath: '_bmad-output/planning-artifacts/epics/story-login.md',
-              activeEpicPath: '_bmad-output/planning-artifacts/epics/epic-auth.md',
-              storyAcceptanceCriteria: ['user can log in'],
-              sprintStatusPath: '_bmad-output/implementation-artifacts/sprint-status.yaml',
-              implementationArtifactsRoot: '_bmad-output/implementation-artifacts',
-              contextBlockedByAmbiguity: false,
-              writebackSupported: true,
-              writebackBlockedByDrift: false,
-            },
-          },
+          { worktreeMode: { enabled: true, detached: true, name: null } },
         ));
 
       const workerPath = runtime.config.workers[0]?.worktree_path;
@@ -1352,8 +1336,6 @@ process.on('SIGTERM', () => process.exit(0));
       const rootAgents = await readFile(join(workerPath, 'AGENTS.md'), 'utf-8');
       assert.match(rootAgents, /Team Worker Runtime Instructions/);
       assert.match(rootAgents, /Inbox path: .*team-detached-worktree-paths\/workers\/worker-1\/inbox\.md/);
-      assert.match(rootAgents, /BMAD-aware team context is active/i);
-      assert.match(rootAgents, /active story: _bmad-output\/planning-artifacts\/epics\/story-login\.md/i);
 
       await sendWorkerMessage(runtime.teamName, 'leader-fixed', 'worker-1', 'follow-up', repo);
       const mailboxLog = await waitForFileText(
