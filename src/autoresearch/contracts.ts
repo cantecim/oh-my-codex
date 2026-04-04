@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, join, relative, resolve } from 'path';
 
@@ -43,6 +43,14 @@ const EVALUATOR_FORMAT_JSON_ERROR = 'sandbox.md frontmatter evaluator.format mus
 
 function contractError(message: string): Error {
   return new Error(message);
+}
+
+function canonicalizePath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
 }
 
 function readGit(repoPath: string, args: string[]): string {
@@ -210,16 +218,16 @@ export function parseEvaluatorResult(raw: string): AutoresearchEvaluatorResult {
 }
 
 export async function loadAutoresearchMissionContract(missionDirArg: string): Promise<AutoresearchMissionContract> {
-  const missionDir = resolve(missionDirArg);
+  const missionDir = canonicalizePath(missionDirArg);
   if (!existsSync(missionDir)) {
     throw contractError(`mission-dir does not exist: ${missionDir}`);
   }
 
-  const repoRoot = readGit(missionDir, ['rev-parse', '--show-toplevel']);
+  const repoRoot = canonicalizePath(readGit(missionDir, ['rev-parse', '--show-toplevel']));
   ensurePathInside(repoRoot, missionDir);
 
-  const missionFile = join(missionDir, 'mission.md');
-  const sandboxFile = join(missionDir, 'sandbox.md');
+  const missionFile = canonicalizePath(join(missionDir, 'mission.md'));
+  const sandboxFile = canonicalizePath(join(missionDir, 'sandbox.md'));
   if (!existsSync(missionFile)) {
     throw contractError(`mission.md is required inside mission-dir: ${missionFile}`);
   }

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, realpathSync } from 'fs';
 import { ensureWorktree, planWorktreeTarget } from '../team/worktree.js';
 import { loadAutoresearchMissionContract } from '../autoresearch/contracts.js';
 import {
@@ -179,12 +179,17 @@ export interface ParsedAutoresearchArgs {
 }
 
 function resolveRepoRoot(cwd: string): string {
-  return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+  const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
     cwd,
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     }).trim();
+  try {
+    return realpathSync.native(repoRoot);
+  } catch {
+    return repoRoot;
+  }
 }
 
 export function parseAutoresearchArgs(args: readonly string[]): ParsedAutoresearchArgs {
