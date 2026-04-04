@@ -1,5 +1,6 @@
 import { safeString } from './utils.js';
-import { runProcess } from './process-runner.js';
+import { runProcess, runProcessWithTrace } from './process-runner.js';
+import { traceDecision } from '../../debug/runtime-trace.js';
 import {
   buildCapturePaneArgv,
   buildPaneInModeArgv,
@@ -15,16 +16,30 @@ export function mapPaneInjectionReadinessReason(reason: any): any {
   return reason === 'pane_running_shell' ? 'agent_not_running' : reason;
 }
 
+async function decisionTrace(event: string, payload: Record<string, unknown> = {}): Promise<void> {
+  await traceDecision(process.cwd(), 'team-tmux-guard', event, payload).catch(() => {});
+}
+
 export async function evaluatePaneInjectionReadiness(paneTarget: any, {
   skipIfScrolling = false,
   captureLines = 80,
   requireRunningAgent = true,
   requireReady = true,
   requireIdle = true,
+  preferCanonicalBypass = true,
 } = {}): Promise<any> {
   const target = safeString(paneTarget).trim();
+  await decisionTrace('pane_guard.readiness_start', {
+    pane_target: target,
+    skip_if_scrolling: skipIfScrolling,
+    capture_lines: captureLines,
+    require_running_agent: requireRunningAgent,
+    require_ready: requireReady,
+    require_idle: requireIdle,
+    result: 'start',
+  });
   if (!target) {
-    return {
+    const result = {
       ok: false,
       sent: false,
       reason: 'missing_pane_target',
@@ -32,14 +47,20 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
       paneCurrentCommand: '',
       paneCapture: '',
     };
+    await decisionTrace('pane_guard.readiness_result', {
+      pane_target: target,
+      reason: result.reason,
+      result: 'skipped',
+    });
+    return result;
   }
 
   // Canonical bypass: if resolveCodexPane confirms this is a codex pane
   // (via pane_start_command), skip all readiness guards. The pane IS running
   // codex even though tmux may report cmd=sh (shell wrapper).
   try {
-    if (resolveCodexPane() === target) {
-      return {
+    if (preferCanonicalBypass && resolveCodexPane() === target) {
+      const result = {
         ok: true,
         sent: false,
         reason: 'ok',
@@ -47,6 +68,12 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
         paneCurrentCommand: 'codex',
         paneCapture: '',
       };
+      await decisionTrace('pane_guard.readiness_result', {
+        pane_target: target,
+        reason: 'resolved_codex_pane',
+        result: 'ok',
+      });
+      return result;
     }
   } catch {
     // Non-fatal: fall through to normal readiness checks
@@ -54,7 +81,9 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
 
   if (skipIfScrolling) {
     try {
-      const modeResult = await runProcess('tmux', buildPaneInModeArgv(target), 1000);
+      const modeResult = await runProcessWithTrace('tmux', buildPaneInModeArgv(target), 1000, {
+        command_role: 'readiness_mode_probe',
+      });
       if (safeString(modeResult.stdout).trim() === '1') {
         return {
           ok: false,
@@ -72,21 +101,77 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
 
   let paneCurrentCommand = '';
   let paneRunningShell = false;
+  let initialPaneInMode = '';
   try {
-    const result = await runProcess('tmux', buildPaneCurrentCommandArgv(target), 1000);
+    if (skipIfScrolling) {
+      try {
+        const modeResult = await runProcessWithTrace('tmux', buildPaneInModeArgv(target), 1000, {
+          command_role: 'readiness_mode_probe',
+        });
+        initialPaneInMode = safeString(modeResult.stdout).trim();
+        if (initialPaneInMode === '1') {
+          return {
+            ok: false,
+            sent: false,
+            reason: 'scroll_active',
+            paneTarget: target,
+            paneCurrentCommand: '',
+            paneCapture: '',
+          };
+        }
+      } catch {
+        // Non-fatal: continue with remaining preflight checks.
+      }
+    }
+    const result = await runProcessWithTrace('tmux', buildPaneCurrentCommandArgv(target), 1000, {
+      command_role: 'readiness_command_probe',
+    });
     paneCurrentCommand = safeString(result.stdout).trim();
     paneRunningShell = requireRunningAgent && isPaneRunningShell(paneCurrentCommand);
+    await decisionTrace('pane_guard.current_command', {
+      pane_target: target,
+      pane_current_command: paneCurrentCommand,
+      pane_running_shell: paneRunningShell,
+      result: 'observed',
+    });
   } catch {
     paneCurrentCommand = '';
   }
 
   try {
-    const capture = await runProcess('tmux', buildCapturePaneArgv(target, captureLines), 1000);
+    if (skipIfScrolling && initialPaneInMode !== '1') {
+      try {
+        const modeRetry = await runProcessWithTrace('tmux', buildPaneInModeArgv(target), 1000, {
+          command_role: 'readiness_mode_probe',
+        });
+        if (safeString(modeRetry.stdout).trim() === '1') {
+          return {
+            ok: false,
+            sent: false,
+            reason: 'scroll_active',
+            paneTarget: target,
+            paneCurrentCommand,
+            paneCapture: '',
+          };
+        }
+      } catch {
+        // Non-fatal: continue to capture checks.
+      }
+    }
+    const capture = await runProcessWithTrace('tmux', buildCapturePaneArgv(target, captureLines), 1000, {
+      command_role: 'readiness_capture',
+    });
     const paneCapture = safeString(capture.stdout);
+    await decisionTrace('pane_guard.capture_result', {
+      pane_target: target,
+      pane_current_command: paneCurrentCommand,
+      pane_capture_excerpt: paneCapture ? paneCapture.slice(-200) : '',
+      result: 'observed',
+    });
     if (paneCapture.trim() !== '') {
       const paneShowsLiveAgent = paneLooksReady(paneCapture) || paneHasActiveTask(paneCapture);
       if (paneRunningShell && !paneShowsLiveAgent) {
-        return {
+        const result = {
           ok: false,
           sent: false,
           reason: 'pane_running_shell',
@@ -94,9 +179,16 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
           paneCurrentCommand,
           paneCapture,
         };
+        await decisionTrace('pane_guard.readiness_result', {
+          pane_target: target,
+          pane_current_command: paneCurrentCommand,
+          reason: result.reason,
+          result: 'skipped',
+        });
+        return result;
       }
       if (requireIdle && paneHasActiveTask(paneCapture)) {
-        return {
+        const result = {
           ok: false,
           sent: false,
           reason: 'pane_has_active_task',
@@ -104,9 +196,16 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
           paneCurrentCommand,
           paneCapture,
         };
+        await decisionTrace('pane_guard.readiness_result', {
+          pane_target: target,
+          pane_current_command: paneCurrentCommand,
+          reason: result.reason,
+          result: 'skipped',
+        });
+        return result;
       }
       if (requireReady && !paneLooksReady(paneCapture)) {
-        return {
+        const result = {
           ok: false,
           sent: false,
           reason: 'pane_not_ready',
@@ -114,10 +213,17 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
           paneCurrentCommand,
           paneCapture,
         };
+        await decisionTrace('pane_guard.readiness_result', {
+          pane_target: target,
+          pane_current_command: paneCurrentCommand,
+          reason: result.reason,
+          result: 'skipped',
+        });
+        return result;
       }
     }
     if (paneRunningShell && paneCapture.trim() === '') {
-      return {
+      const result = {
         ok: false,
         sent: false,
         reason: 'pane_running_shell',
@@ -125,8 +231,15 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
         paneCurrentCommand,
         paneCapture,
       };
+      await decisionTrace('pane_guard.readiness_result', {
+        pane_target: target,
+        pane_current_command: paneCurrentCommand,
+        reason: result.reason,
+        result: 'skipped',
+      });
+      return result;
     }
-    return {
+    const result = {
       ok: true,
       sent: false,
       reason: 'ok',
@@ -134,9 +247,16 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
       paneCurrentCommand,
       paneCapture,
     };
+    await decisionTrace('pane_guard.readiness_result', {
+      pane_target: target,
+      pane_current_command: paneCurrentCommand,
+      reason: result.reason,
+      result: 'ok',
+    });
+    return result;
   } catch {
     if (paneRunningShell) {
-      return {
+      const result = {
         ok: false,
         sent: false,
         reason: 'pane_running_shell',
@@ -144,8 +264,15 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
         paneCurrentCommand,
         paneCapture: '',
       };
+      await decisionTrace('pane_guard.readiness_result', {
+        pane_target: target,
+        pane_current_command: paneCurrentCommand,
+        reason: result.reason,
+        result: 'skipped',
+      });
+      return result;
     }
-    return {
+    const result = {
       ok: true,
       sent: false,
       reason: 'ok',
@@ -153,6 +280,13 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
       paneCurrentCommand,
       paneCapture: '',
     };
+    await decisionTrace('pane_guard.readiness_result', {
+      pane_target: target,
+      pane_current_command: paneCurrentCommand,
+      reason: result.reason,
+      result: 'ok',
+    });
+    return result;
   }
 }
 
@@ -164,8 +298,22 @@ export async function sendPaneInput({
   typePrompt = true,
 }: any): Promise<any> {
   const target = safeString(paneTarget).trim();
+  await decisionTrace('pane_guard.send_start', {
+    pane_target: target,
+    submit_key_presses: submitKeyPresses,
+    submit_delay_ms: submitDelayMs,
+    type_prompt: typePrompt,
+    prompt_preview: safeString(prompt).slice(0, 120),
+    result: 'start',
+  });
   if (!target) {
-    return { ok: false, sent: false, reason: 'missing_pane_target', paneTarget: '' };
+    const result = { ok: false, sent: false, reason: 'missing_pane_target', paneTarget: '' };
+    await decisionTrace('pane_guard.send_result', {
+      pane_target: target,
+      reason: result.reason,
+      result: 'error',
+    });
+    return result;
   }
 
   const normalizedSubmitKeyPresses = Number.isFinite(submitKeyPresses)
@@ -184,22 +332,39 @@ export async function sendPaneInput({
       submitKeyPresses: normalizedSubmitKeyPresses,
     });
   if (!argv) {
-    return { ok: false, sent: false, reason: 'send_failed', paneTarget: target };
+    const result = { ok: false, sent: false, reason: 'send_failed', paneTarget: target };
+    await decisionTrace('pane_guard.send_result', {
+      pane_target: target,
+      reason: result.reason,
+      result: 'error',
+    });
+    return result;
   }
 
   try {
     if (typePrompt) {
-      await runProcess('tmux', argv.typeArgv, 3000);
+      await runProcessWithTrace('tmux', argv.typeArgv, 3000, {
+        command_role: 'send_literal',
+      });
     }
     for (const submit of argv.submitArgv) {
       if (submitDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, submitDelayMs));
       }
-      await runProcess('tmux', submit, 3000);
+      await runProcessWithTrace('tmux', submit, 3000, {
+        command_role: 'submit_keypress',
+      });
     }
-    return { ok: true, sent: true, reason: 'sent', paneTarget: target, argv };
+    const result = { ok: true, sent: true, reason: 'sent', paneTarget: target, argv };
+    await decisionTrace('pane_guard.send_result', {
+      pane_target: target,
+      reason: result.reason,
+      argv,
+      result: 'ok',
+    });
+    return result;
   } catch (error) {
-    return {
+    const result = {
       ok: false,
       sent: false,
       reason: 'send_failed',
@@ -207,6 +372,14 @@ export async function sendPaneInput({
       argv,
       error: error instanceof Error ? error.message : safeString(error),
     };
+    await decisionTrace('pane_guard.send_result', {
+      pane_target: target,
+      reason: result.reason,
+      argv,
+      error: result.error,
+      result: 'error',
+    });
+    return result;
   }
 }
 

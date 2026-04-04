@@ -3,12 +3,13 @@ import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { initTeamState, enqueueDispatchRequest, readDispatchRequest } from '../../team/state.js';
 import { writeSessionStart } from '../session.js';
 import {
+  buildDebugChildEnv,
   buildFakeTmuxScript,
   buildIsolatedEnv,
 } from '../../test-support/shared-harness.js';
@@ -73,15 +74,19 @@ function buildFakeTmux(
   tmuxLogPath: string,
   options: { failSendKeys?: boolean; failSendKeysMatch?: string; listPaneLines?: string[] } = {},
 ): string {
+  const probePath = dirname(tmuxLogPath);
   return buildFakeTmuxScript(tmuxLogPath, {
     defaultProbe: {
       paneInMode: '0',
       paneId: '%42',
-      currentPath: dirname(tmuxLogPath),
+      currentPath: probePath,
       currentCommand: 'codex',
+      startCommand: 'codex --model gpt-5',
       sessionName: 'session-test',
     },
     listPaneLines: options.listPaneLines ?? ['%42 1'],
+    sessionPaneLines: ['%42\tcodex\tcodex --model gpt-5'],
+    allPaneLines: [`%42\t${probePath}\tcodex\tcodex --model gpt-5`],
     failSendKeys: options.failSendKeys,
     failSendKeysMatch: options.failSendKeysMatch,
   });
@@ -89,8 +94,21 @@ function buildFakeTmux(
 
 function buildCleanNotifyEnv(
   overrides: Record<string, string> = {},
+  debugCwd = process.cwd(),
 ): NodeJS.ProcessEnv {
-  return buildIsolatedEnv(overrides);
+  const inferredCwd = (() => {
+    if (debugCwd !== process.cwd()) return debugCwd;
+    const stateRoot = overrides.OMX_TEAM_STATE_ROOT;
+    if (stateRoot) return resolve(stateRoot, '..', '..');
+    const pathValue = overrides.PATH || '';
+    const firstPathEntry = pathValue.split(':').find(Boolean) || '';
+    if (firstPathEntry.endsWith('/fake-bin')) return resolve(firstPathEntry, '..');
+    return debugCwd;
+  })();
+  return buildIsolatedEnv({
+    ...buildDebugChildEnv(inferredCwd),
+    ...overrides,
+  });
 }
 
 describe('notify-fallback watcher', () => {
@@ -605,6 +623,7 @@ describe('notify-fallback watcher', () => {
       await mkdir(join(wd, '.omx', 'state', 'team', 'dispatch-team'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state', 'team', 'dispatch-team', 'workers', 'worker-1'), { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(tmuxLogPath, '');
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath, {
         listPaneLines: ['%10 12345'],
       }));
@@ -639,6 +658,7 @@ describe('notify-fallback watcher', () => {
         process.execPath,
         [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook],
         {
+          cwd: wd,
           encoding: 'utf-8',
           env: buildCleanNotifyEnv({
             PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
@@ -664,6 +684,7 @@ describe('notify-fallback watcher', () => {
       assert.ok(nudgeEvent, 'expected leader_nudge_tick log event');
       assert.equal(nudgeEvent.leader_only, true);
       assert.equal(nudgeEvent.precomputed_leader_stale, true);
+
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -1037,6 +1058,7 @@ describe('notify-fallback watcher', () => {
     const captureFile = join(wd, 'capture.txt');
     try {
       await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(tmuxLogPath, '');
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
       await writeFile(captureFile, 'dispatch ping');

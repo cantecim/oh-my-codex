@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 function buildFakeTmux(tmuxLogPath: string): string {
   return `#!/usr/bin/env bash
 set -eu
+if [[ ! -f "${tmuxLogPath}" ]]; then : > "${tmuxLogPath}"; fi
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
@@ -91,7 +92,7 @@ exit 0
 `;
 }
 
-describe('notify-hook team dispatch consumer', () => {
+describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
   const originalTeamWorker = process.env.OMX_TEAM_WORKER;
   const originalTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
 

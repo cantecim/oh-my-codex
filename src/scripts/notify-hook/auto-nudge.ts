@@ -604,6 +604,13 @@ export async function resolveNudgePaneTarget(stateDir: any, cwd = '') {
 
   if (fallbackPane) return fallbackPane;
 
+  const rawTmuxPane = safeString(process.env.TMUX_PANE).trim();
+  if (rawTmuxPane) {
+    const healedTmuxPane = await resolveCodexPaneFromAnchor(rawTmuxPane);
+    if (healedTmuxPane) return healedTmuxPane;
+    return rawTmuxPane;
+  }
+
   // Use canonical codex pane resolver only after honoring active-mode anchors.
   const { resolveCodexPane } = await import('../tmux-hook-engine.js');
   const codexPane = resolveCodexPane();

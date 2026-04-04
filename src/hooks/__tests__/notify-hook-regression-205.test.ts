@@ -17,6 +17,11 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { existsSync } from 'node:fs';
 import { writeSessionStart } from '../session.js';
 import { tmpdir } from 'node:os';
+import {
+  buildDebugChildEnv,
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+} from '../../test-support/shared-harness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = join(__dirname, '..', '..', '..', 'dist', 'scripts');
@@ -40,47 +45,19 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 function buildFakeTmux(tmuxLogPath: string): string {
-  return `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "capture-pane" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%99" ]]; then
-    echo "codex --model gpt-5"
-    exit 0
-  fi
-  if [[ "$format" == "#S" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%1 12345"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    paneProbes: {
+      '%99': {
+        currentCommand: 'node',
+        startCommand: 'codex --model gpt-5',
+        sessionName: 'devsess',
+      },
+    },
+    defaultProbe: {
+      sessionName: 'devsess',
+    },
+    listPaneLines: ['%1 12345'],
+  });
 }
 
 function runNotifyHook(
@@ -101,10 +78,11 @@ function runNotifyHook(
   };
 
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+    cwd,
     encoding: 'utf8',
     timeout: 15_000,
-    env: {
-      ...process.env,
+    env: buildIsolatedEnv({
+      ...buildDebugChildEnv(cwd),
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
       OMX_SESSION_ID: 'sess-managed-regression',
@@ -113,7 +91,7 @@ function runNotifyHook(
       OMX_TEAM_WORKER: '',
       OMX_TEAM_LEADER_NUDGE_MS: '9999999',
       OMX_TEAM_LEADER_STALE_MS: '9999999',
-    },
+    }),
   });
 }
 

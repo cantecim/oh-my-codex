@@ -6,10 +6,11 @@ import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'node:url';
 import { safeString } from './utils.js';
 import { resolveBridgeStateDir, resolveRuntimeBinaryPath } from '../../runtime/bridge.js';
+import { buildRuntimeTraceId, traceDecision as appendRuntimeDecisionTrace } from '../../debug/runtime-trace.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { runProcess } from './process-runner.js';
+import { runProcess, runProcessWithTrace } from './process-runner.js';
 import { resolvePaneTarget } from './tmux-injection.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import {
@@ -363,11 +364,38 @@ const INJECT_VERIFY_DELAY_MS = 250;
 const INJECT_VERIFY_ROUNDS = 3;
 
 async function injectDispatchRequest(request, config, cwd, stateDir) {
+  const traceId = dispatchTraceId(request);
   const target = defaultInjectTarget(request, config);
+  await decisionTrace(cwd, 'dispatch.target_selected', {
+    trace_id: traceId,
+    request_id: safeString(request.request_id).trim(),
+    to_worker: safeString(request.to_worker).trim(),
+    attempt_count: Number.isFinite(request.attempt_count) ? Math.max(0, Math.floor(request.attempt_count)) : 0,
+    target_type: safeString(target?.type).trim(),
+    target_value: safeString(target?.value).trim(),
+    result: target ? 'selected' : 'missing',
+  });
   if (!target) {
     return { ok: false, reason: 'missing_tmux_target' };
   }
+  await decisionTrace(cwd, 'dispatch.target_resolve_start', {
+    trace_id: traceId,
+    request_id: safeString(request.request_id).trim(),
+    target_type: safeString(target.type).trim(),
+    target_value: safeString(target.value).trim(),
+    result: 'start',
+  });
   const resolution = await resolvePaneTarget(target, '', cwd, '');
+  await decisionTrace(cwd, 'dispatch.target_resolve_result', {
+    trace_id: traceId,
+    request_id: safeString(request.request_id).trim(),
+    target_type: safeString(target.type).trim(),
+    target_value: safeString(target.value).trim(),
+    resolved_pane: safeString(resolution.paneTarget).trim(),
+    reason: safeString(resolution.reason).trim(),
+    matched_session: safeString(resolution.matched_session).trim(),
+    result: resolution.paneTarget ? 'resolved' : 'failed',
+  });
   if (!resolution.paneTarget) {
     return { ok: false, reason: `target_resolution_failed:${resolution.reason}` };
   }
@@ -376,6 +404,15 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
     requireRunningAgent: false,
     requireReady: false,
     requireIdle: false,
+    preferCanonicalBypass: false,
+  });
+  await decisionTrace(cwd, 'dispatch.pane_guard_result', {
+    trace_id: traceId,
+    request_id: safeString(request.request_id).trim(),
+    resolved_pane: safeString(resolution.paneTarget).trim(),
+    reason: safeString(paneGuard.reason).trim(),
+    pane_current_command: safeString(paneGuard.paneCurrentCommand).trim(),
+    result: paneGuard.ok ? 'ok' : 'blocked',
   });
   if (!paneGuard.ok) {
     return { ok: false, reason: paneGuard.reason };
@@ -388,21 +425,54 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
   let preCaptureHasTrigger = false;
   if (attemptCountAtStart >= 1) {
     try {
-      // Narrow capture (8 lines) to scope check to input area, not scrollback output
-      const preCapture = await runProcess('tmux', buildCapturePaneArgv(resolution.paneTarget, 8), 2000);
+      const preCapture = await runProcessWithTrace('tmux', buildCapturePaneArgv(resolution.paneTarget, 8), 2000, {
+        trace_id: traceId,
+        command_role: 'pre_capture_narrow',
+        request_id: safeString(request.request_id).trim(),
+      });
       preCaptureHasTrigger = capturedPaneContainsTrigger(preCapture.stdout, request.trigger_message);
+      await decisionTrace(cwd, 'dispatch.pre_capture_result', {
+        trace_id: traceId,
+        request_id: safeString(request.request_id).trim(),
+        attempt_count: attemptCountAtStart,
+        resolved_pane: safeString(resolution.paneTarget).trim(),
+        trigger_visible: preCaptureHasTrigger,
+        capture_excerpt: safeString(preCapture.stdout).slice(-200),
+        result: 'observed',
+      });
     } catch {
       preCaptureHasTrigger = false;
+      await decisionTrace(cwd, 'dispatch.pre_capture_result', {
+        trace_id: traceId,
+        request_id: safeString(request.request_id).trim(),
+        attempt_count: attemptCountAtStart,
+        resolved_pane: safeString(resolution.paneTarget).trim(),
+        trigger_visible: false,
+        reason: 'capture_failed',
+        result: 'error',
+      });
     }
   }
 
   // Retype whenever trigger text is NOT in the narrow input area, regardless of attempt count.
   // Pre-0.7.4 bug: 80-line capture matched trigger in scrollback output, falsely skipping retype.
   const shouldTypePrompt = attemptCountAtStart === 0 || !preCaptureHasTrigger;
+  await decisionTrace(cwd, 'dispatch.send_attempt', {
+    trace_id: traceId,
+    request_id: safeString(request.request_id).trim(),
+    attempt_count: attemptCountAtStart,
+    resolved_pane: safeString(resolution.paneTarget).trim(),
+    should_type_prompt: shouldTypePrompt,
+    submit_key_presses: submitKeyPresses,
+    result: 'start',
+  });
   if (shouldTypePrompt) {
     if (attemptCountAtStart >= 1) {
-      // Clear stale text in input buffer before retyping (mirrors sync path tmux-session.ts:1270)
-      await runProcess('tmux', ['send-keys', '-t', resolution.paneTarget, 'C-u'], 1000).catch(() => {});
+      await runProcessWithTrace('tmux', ['send-keys', '-t', resolution.paneTarget, 'C-u'], 1000, {
+        trace_id: traceId,
+        command_role: 'clear_input_buffer',
+        request_id: safeString(request.request_id).trim(),
+      }).catch(() => {});
       await new Promise((r) => setTimeout(r, 50));
     }
   }
@@ -430,10 +500,36 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
       // This avoids false confirmations when Codex leaves the unsent draft just
       // above a large blank area (narrow capture misses it) while still avoiding
       // full-scrollback false positives.
-      const narrowCap = await runProcess('tmux', verifyNarrowArgv, 2000);
-      const wideCap = await runProcess('tmux', verifyWideArgv, 2000);
-      // Worker is actively processing (mirrors sync path tmux-session.ts:1292-1294)
-      if (paneHasActiveTask(wideCap.stdout)) {
+      const narrowCap = await runProcessWithTrace('tmux', verifyNarrowArgv, 2000, {
+        trace_id: traceId,
+        command_role: 'verify_narrow',
+        request_id: safeString(request.request_id).trim(),
+        verify_round: round + 1,
+      });
+      const wideCap = await runProcessWithTrace('tmux', verifyWideArgv, 2000, {
+        trace_id: traceId,
+        command_role: 'verify_wide',
+        request_id: safeString(request.request_id).trim(),
+        verify_round: round + 1,
+      });
+      const triggerInNarrow = capturedPaneContainsTrigger(narrowCap.stdout, request.trigger_message);
+      const triggerNearTail = capturedPaneContainsTriggerNearTail(wideCap.stdout, request.trigger_message);
+      const activeTask = paneHasActiveTask(wideCap.stdout);
+      const looksReady = paneLooksReady(wideCap.stdout);
+      await decisionTrace(cwd, 'dispatch.verify_round_result', {
+        trace_id: traceId,
+        request_id: safeString(request.request_id).trim(),
+        verify_round: round + 1,
+        resolved_pane: safeString(resolution.paneTarget).trim(),
+        trigger_in_narrow: triggerInNarrow,
+        trigger_near_tail: triggerNearTail,
+        pane_has_active_task: activeTask,
+        pane_looks_ready: looksReady,
+        narrow_excerpt: safeString(narrowCap.stdout).slice(-160),
+        wide_excerpt: safeString(wideCap.stdout).slice(-160),
+        result: 'observed',
+      });
+      if (activeTask) {
         runtimeExec({ command: 'MarkDelivered', request_id: request.request_id }, stateDir);
         return { ok: true, reason: 'tmux_send_keys_confirmed_active_task', pane: resolution.paneTarget };
       }
@@ -441,17 +537,22 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
       // input-ready. Otherwise a pre-ready send can be marked "confirmed" and later
       // appear as a stuck unsent draft once the UI finishes loading.
       // Keep leader-fixed behavior unchanged to avoid regressing leader notification flow.
-      if (request.to_worker !== 'leader-fixed' && !paneLooksReady(wideCap.stdout)) {
+      if (request.to_worker !== 'leader-fixed' && !looksReady) {
         continue;
       }
-      const triggerInNarrow = capturedPaneContainsTrigger(narrowCap.stdout, request.trigger_message);
-      const triggerNearTail = capturedPaneContainsTriggerNearTail(wideCap.stdout, request.trigger_message);
       if (!triggerInNarrow && !triggerNearTail) {
         runtimeExec({ command: 'MarkDelivered', request_id: request.request_id }, stateDir);
         return { ok: true, reason: 'tmux_send_keys_confirmed', pane: resolution.paneTarget };
       }
     } catch {
-      // capture failed; fall through to retry C-m
+      await decisionTrace(cwd, 'dispatch.verify_round_result', {
+        trace_id: traceId,
+        request_id: safeString(request.request_id).trim(),
+        verify_round: round + 1,
+        resolved_pane: safeString(resolution.paneTarget).trim(),
+        reason: 'capture_failed',
+        result: 'error',
+      });
     }
     // Draft still visible and no active task — retry C-m
     await sendPaneInput({
@@ -490,6 +591,14 @@ async function appendDispatchLog(logsDir, event) {
   const path = join(logsDir, `team-dispatch-${new Date().toISOString().slice(0, 10)}.jsonl`);
   await mkdir(logsDir, { recursive: true }).catch(() => {});
   await appendFile(path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
+}
+
+async function decisionTrace(cwd, event, payload = {}) {
+  await appendRuntimeDecisionTrace(cwd, 'team-dispatch', event, payload).catch(() => {});
+}
+
+function dispatchTraceId(request) {
+  return buildRuntimeTraceId('dispatch', safeString(request?.request_id).trim() || 'unknown');
 }
 
 export async function drainPendingTeamDispatch({
@@ -536,8 +645,25 @@ export async function drainPendingTeamDispatch({
       for (const request of requests) {
         if (processed >= maxPerTick) break;
         if (!request || typeof request !== 'object') continue;
+        await decisionTrace(cwd, 'dispatch.request_loaded', {
+          trace_id: dispatchTraceId(request),
+          team_name: teamName,
+          request_id: safeString(request.request_id).trim(),
+          to_worker: safeString(request.to_worker).trim(),
+          status: safeString(request.status).trim(),
+          result: 'loaded',
+        });
         if (shouldSkipRequest(request)) {
           skipped += 1;
+          await decisionTrace(cwd, 'dispatch.request_skipped', {
+            trace_id: dispatchTraceId(request),
+            team_name: teamName,
+            request_id: safeString(request.request_id).trim(),
+            to_worker: safeString(request.to_worker).trim(),
+            status: safeString(request.status).trim(),
+            reason: 'should_skip_request',
+            result: 'skipped',
+          });
           continue;
         }
 
@@ -577,6 +703,14 @@ export async function drainPendingTeamDispatch({
               sourceType: 'team_dispatch',
             });
           }
+          await decisionTrace(cwd, 'dispatch.request_deferred', {
+            trace_id: dispatchTraceId(request),
+            team_name: teamName,
+            request_id: safeString(request.request_id).trim(),
+            to_worker: safeString(request.to_worker).trim(),
+            reason: LEADER_PANE_MISSING_DEFERRED_REASON,
+            result: 'deferred',
+          });
           continue;
         }
 
@@ -585,6 +719,14 @@ export async function drainPendingTeamDispatch({
           const lastInjectedMs = Number(issueCooldownByIssue[issueKey]);
           if (Number.isFinite(lastInjectedMs) && lastInjectedMs > 0 && nowMs - lastInjectedMs < issueCooldownMs) {
             skipped += 1;
+            await decisionTrace(cwd, 'dispatch.request_skipped', {
+              trace_id: dispatchTraceId(request),
+              team_name: teamName,
+              request_id: safeString(request.request_id).trim(),
+              to_worker: safeString(request.to_worker).trim(),
+              reason: 'issue_cooldown_active',
+              result: 'skipped',
+            });
             continue;
           }
         }
@@ -596,6 +738,14 @@ export async function drainPendingTeamDispatch({
           const sameRequestRetry = parsed.lastRequestId !== '' && parsed.lastRequestId === safeString(request.request_id).trim();
           if (withinCooldown && !sameRequestRetry) {
             skipped += 1;
+            await decisionTrace(cwd, 'dispatch.request_skipped', {
+              trace_id: dispatchTraceId(request),
+              team_name: teamName,
+              request_id: safeString(request.request_id).trim(),
+              to_worker: safeString(request.to_worker).trim(),
+              reason: 'trigger_cooldown_active',
+              result: 'skipped',
+            });
             continue;
           }
         }
@@ -642,6 +792,15 @@ export async function drainPendingTeamDispatch({
               reason: result.reason,
               status: 'retry-needed',
             });
+            await decisionTrace(cwd, 'dispatch.request_processed', {
+              trace_id: dispatchTraceId(request),
+              team_name: teamName,
+              request_id: safeString(request.request_id).trim(),
+              to_worker: safeString(request.to_worker).trim(),
+              reason: result.reason,
+              attempt_count: request.attempt_count,
+              result: 'retry_pending',
+            });
             continue;
           }
           if (result.reason === 'tmux_send_keys_unconfirmed') {
@@ -670,6 +829,14 @@ export async function drainPendingTeamDispatch({
               error_summary: request.last_reason,
               status: 'failed',
             });
+            await decisionTrace(cwd, 'dispatch.request_failed', {
+              trace_id: dispatchTraceId(request),
+              team_name: teamName,
+              request_id: safeString(request.request_id).trim(),
+              to_worker: safeString(request.to_worker).trim(),
+              reason: request.last_reason,
+              result: 'failed',
+            });
             continue;
           }
           request.status = 'notified';
@@ -689,6 +856,14 @@ export async function drainPendingTeamDispatch({
             worker: request.to_worker,
             message_id: request.message_id || null,
             reason: result.reason,
+          });
+          await decisionTrace(cwd, 'dispatch.request_processed', {
+            trace_id: dispatchTraceId(request),
+            team_name: teamName,
+            request_id: safeString(request.request_id).trim(),
+            to_worker: safeString(request.to_worker).trim(),
+            reason: result.reason,
+            result: 'notified',
           });
         } else {
           request.status = 'failed';
@@ -716,6 +891,14 @@ export async function drainPendingTeamDispatch({
             ...(result.reason === LEADER_PANE_MISSING_DEFERRED_REASON
               ? { status: 'handoff-needed' }
               : { status: 'failed', error_summary: result.reason }),
+          });
+          await decisionTrace(cwd, 'dispatch.request_failed', {
+            trace_id: dispatchTraceId(request),
+            team_name: teamName,
+            request_id: safeString(request.request_id).trim(),
+            to_worker: safeString(request.to_worker).trim(),
+            reason: result.reason,
+            result: 'failed',
           });
         }
       }

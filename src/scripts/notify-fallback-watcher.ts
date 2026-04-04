@@ -5,6 +5,7 @@ import { appendFile, mkdir, open, readFile, readdir, rename, stat, unlink, write
 import { spawnSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
+import { buildRuntimeTraceId, traceDecision as appendRuntimeDecisionTrace } from '../debug/runtime-trace.js';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
 import {
   maybeAutoNudge,
@@ -192,6 +193,7 @@ const fileState = new Map<string, WatcherFileMeta>();
 const seenTurnKeys = new Set<string>();
 let stopping = false;
 let shutdownPromise: Promise<void> | null = null;
+let watcherTickSeq = 0;
 const dispatchTickMax = Math.max(1, asNumber(argValue('--dispatch-max-per-tick', '5'), 5));
 let dispatchDrainRuns = 0;
 let lastDispatchDrain: DispatchDrainState = {
@@ -250,6 +252,14 @@ let lastFallbackAutoNudge: FallbackAutoNudgeState = {
 };
 function eventLog(event: Record<string, unknown>): Promise<void> {
   return appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
+}
+
+async function decisionTrace(event: string, payload: Record<string, unknown> = {}): Promise<void> {
+  await appendRuntimeDecisionTrace(cwd, 'notify-fallback-watcher', event, payload).catch(() => {});
+}
+
+function watcherTraceId(tickSeq: number): string {
+  return buildRuntimeTraceId('watcher', String(process.pid), String(tickSeq));
 }
 
 function normalizeRalphContinueSteerState(raw: Record<string, unknown> | null | undefined): RalphContinueSteerState {
@@ -423,6 +433,16 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
       .map((worker) => safeString(worker?.pane_id).trim())
       .filter(Boolean);
     const paneStatus = await checkWorkerPanesAlive(tmuxSession, workerPaneIds as any);
+    await decisionTrace('watcher.worker_panes_alive_check', {
+      trace_id: watcherTraceId(watcherTickSeq || 0),
+      tick_seq: watcherTickSeq || 0,
+      team_name: teamName,
+      session_name: tmuxSession,
+      worker_pane_ids: workerPaneIds,
+      pane_count: paneStatus.paneCount,
+      alive: paneStatus.alive,
+      result: paneStatus.alive ? 'alive' : 'not_alive',
+    });
     if (!paneStatus.alive) continue;
 
     return {
@@ -839,6 +859,10 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
   const nowIso = new Date(now).toISOString();
   const hudStatePath = join(stateDir, 'hud-state.json');
   const hudState = await readJsonObject(hudStatePath);
+  await decisionTrace('watcher.auto_nudge_tick', {
+    stall_ms: AUTO_NUDGE_STALL_MS,
+    result: 'start',
+  });
 
   lastFallbackAutoNudge = {
     ...lastFallbackAutoNudge,
@@ -850,6 +874,7 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
 
   if (!hudState) {
     lastFallbackAutoNudge.last_reason = 'hud_state_missing';
+    await decisionTrace('watcher.auto_nudge_tick', { reason: 'hud_state_missing', result: 'skipped' });
     return;
   }
 
@@ -864,14 +889,17 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
 
   if (!lastTurnAt || lastTurnMs === null || turnCount === null || turnCount < 1) {
     lastFallbackAutoNudge.last_reason = 'hud_state_incomplete';
+    await decisionTrace('watcher.auto_nudge_tick', { reason: 'hud_state_incomplete', result: 'skipped' });
     return;
   }
   if (!lastMessage.trim()) {
     lastFallbackAutoNudge.last_reason = 'no_last_message';
+    await decisionTrace('watcher.auto_nudge_tick', { reason: 'no_last_message', result: 'skipped' });
     return;
   }
   if (now - lastTurnMs < AUTO_NUDGE_STALL_MS) {
     lastFallbackAutoNudge.last_reason = 'recent_turn_activity';
+    await decisionTrace('watcher.auto_nudge_tick', { reason: 'recent_turn_activity', result: 'skipped' });
     return;
   }
 
@@ -890,6 +918,7 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
   if (signature && safeString(persistedAutoNudgeState?.lastSignature) === signature) {
     lastFallbackAutoNudge.last_reason = 'already_nudged_for_signature';
     lastFallbackAutoNudge.last_nudged_signature = signature;
+    await decisionTrace('watcher.auto_nudge_tick', { reason: 'already_nudged_for_signature', result: 'skipped' });
     return;
   }
   const lastNudgeAtMs = parseIsoMillis(safeString(persistedAutoNudgeState?.lastNudgeAt));
@@ -902,6 +931,7 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
   ) {
     lastFallbackAutoNudge.last_reason = 'ttl_active';
     lastFallbackAutoNudge.last_nudged_signature = signature;
+    await decisionTrace('watcher.auto_nudge_tick', { reason: 'ttl_active', result: 'skipped' });
     return;
   }
 
@@ -933,10 +963,23 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
       last_turn_at: lastTurnAt,
       stall_ms: AUTO_NUDGE_STALL_MS,
     });
+    await decisionTrace('watcher.auto_nudge_tick', {
+      reason: 'sent',
+      turn_count: turnCount,
+      last_turn_at: lastTurnAt,
+      stall_ms: AUTO_NUDGE_STALL_MS,
+      result: 'processed',
+    });
     return;
   }
 
   lastFallbackAutoNudge.last_reason = 'eligible_but_not_sent';
+  await decisionTrace('watcher.auto_nudge_tick', {
+    reason: 'eligible_but_not_sent',
+    turn_count: turnCount,
+    last_turn_at: lastTurnAt,
+    result: 'skipped',
+  });
 }
 
 async function requestShutdown(reason: string, signal: string | null = null): Promise<void> {
@@ -957,9 +1000,15 @@ async function requestShutdown(reason: string, signal: string | null = null): Pr
   return shutdownPromise;
 }
 
-async function enforceLifecycleGuards(): Promise<boolean> {
+async function enforceLifecycleGuards(traceId = '', tickSeq = 0): Promise<boolean> {
   if (runOnce) return false;
   if (parentIsGone()) {
+    await decisionTrace('watcher.parent_exit_detected', {
+      trace_id: traceId || undefined,
+      tick_seq: tickSeq || undefined,
+      parent_pid: parentPid,
+      result: 'observed',
+    });
     const activeRalph = await resolveActiveRalphState();
     if (activeRalph.active) {
       const currentPhase = safeString(activeRalph.state?.current_phase);
@@ -983,10 +1032,27 @@ async function enforceLifecycleGuards(): Promise<boolean> {
         });
         lastParentGuard = nextParentGuard;
       }
+      await decisionTrace('watcher.parent_guard', {
+        trace_id: traceId || undefined,
+        tick_seq: tickSeq || undefined,
+        reason: nextParentGuard.reason,
+        state_path: nextParentGuard.state_path,
+        current_phase: currentPhase || null,
+        result: 'deferred',
+      });
       return false;
     }
 
     const activeTeam = await resolveActiveTeamState();
+    await decisionTrace('watcher.active_team_check', {
+      trace_id: traceId || undefined,
+      tick_seq: tickSeq || undefined,
+      active_team: activeTeam.active,
+      team_name: activeTeam.team_name,
+      pane_count: activeTeam.pane_count,
+      reason: activeTeam.reason,
+      result: activeTeam.active ? 'active' : 'inactive',
+    });
     if (activeTeam.active) {
       const currentPhase = safeString(activeTeam.state?.current_phase);
       const nextParentGuard: ParentGuardState = {
@@ -1013,14 +1079,52 @@ async function enforceLifecycleGuards(): Promise<boolean> {
         });
         lastParentGuard = nextParentGuard;
       }
+      await decisionTrace('watcher.parent_guard', {
+        trace_id: traceId || undefined,
+        tick_seq: tickSeq || undefined,
+        reason: nextParentGuard.reason,
+        state_path: nextParentGuard.state_path,
+        current_phase: currentPhase || null,
+        team_name: activeTeam.team_name,
+        pane_count: activeTeam.pane_count,
+        result: 'deferred',
+      });
+      await decisionTrace('watcher.keep_alive_decision', {
+        trace_id: traceId || undefined,
+        tick_seq: tickSeq || undefined,
+        active_team: true,
+        team_name: activeTeam.team_name,
+        pane_count: activeTeam.pane_count,
+        reason: 'active_team_alive',
+        result: 'keep_alive',
+      });
       return false;
     }
 
     lastParentGuard = { reason: '', state_path: '', current_phase: '' };
+    await decisionTrace('watcher.parent_guard', {
+      trace_id: traceId || undefined,
+      tick_seq: tickSeq || undefined,
+      reason: 'parent_gone',
+      result: 'stop',
+    });
+    await decisionTrace('watcher.keep_alive_decision', {
+      trace_id: traceId || undefined,
+      tick_seq: tickSeq || undefined,
+      active_team: false,
+      reason: 'parent_gone',
+      result: 'stop',
+    });
     await requestShutdown('parent_gone');
     return true;
   }
   if (maxLifetimeMs > 0 && Date.now() - startedAt >= maxLifetimeMs) {
+    await decisionTrace('watcher.parent_guard', {
+      trace_id: traceId || undefined,
+      tick_seq: tickSeq || undefined,
+      reason: 'max_lifetime_exceeded',
+      result: 'stop',
+    });
     await requestShutdown('max_lifetime_exceeded');
     return true;
   }
@@ -1194,6 +1298,11 @@ async function runLeaderNudgeTick(): Promise<void> {
   const startedIso = new Date().toISOString();
   const leaderOnly = safeString(process.env.OMX_TEAM_WORKER || '').trim() === '';
   const staleThresholdMs = resolveLeaderStalenessThresholdMs();
+  await decisionTrace('watcher.leader_nudge_tick', {
+    leader_only: leaderOnly,
+    stale_threshold_ms: staleThresholdMs,
+    result: 'start',
+  });
 
   if (!leaderOnly) {
     leaderNudgeRuns += 1;
@@ -1211,6 +1320,12 @@ async function runLeaderNudgeTick(): Promise<void> {
       run_count: leaderNudgeRuns,
       reason: 'worker_context',
       stale_threshold_ms: staleThresholdMs,
+    });
+    await decisionTrace('watcher.leader_nudge_tick', {
+      leader_only: false,
+      stale_threshold_ms: staleThresholdMs,
+      reason: 'worker_context',
+      result: 'skipped',
     });
     return;
   }
@@ -1237,6 +1352,13 @@ async function runLeaderNudgeTick(): Promise<void> {
       precomputed_leader_stale: preComputedLeaderStale,
       reason: preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale',
     });
+    await decisionTrace('watcher.leader_nudge_tick', {
+      leader_only: true,
+      stale_threshold_ms: staleThresholdMs,
+      precomputed_leader_stale: preComputedLeaderStale,
+      reason: preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale',
+      result: preComputedLeaderStale ? 'processed' : 'skipped',
+    });
   } catch (err) {
     leaderNudgeRuns += 1;
     lastLeaderNudge = {
@@ -1255,11 +1377,22 @@ async function runLeaderNudgeTick(): Promise<void> {
       reason: 'leader_nudge_failed',
       error: lastLeaderNudge.last_error,
     });
+    await decisionTrace('watcher.leader_nudge_tick', {
+      leader_only: true,
+      stale_threshold_ms: staleThresholdMs,
+      reason: 'leader_nudge_failed',
+      error: lastLeaderNudge.last_error,
+      result: 'error',
+    });
   }
 }
 
 async function runDispatchDrainTick(): Promise<void> {
   const startedIso = new Date().toISOString();
+  await decisionTrace('watcher.dispatch_tick', {
+    dispatch_max_per_tick: dispatchTickMax,
+    result: 'start',
+  });
   try {
     const result = await drainPendingTeamDispatch({ cwd, stateDir, logsDir, maxPerTick: dispatchTickMax } as any);
     dispatchDrainRuns += 1;
@@ -1276,6 +1409,11 @@ async function runDispatchDrainTick(): Promise<void> {
       run_count: dispatchDrainRuns,
       ...(result && typeof result === 'object' ? result as Record<string, unknown> : {}),
     });
+    await decisionTrace('watcher.dispatch_tick', {
+      dispatch_max_per_tick: dispatchTickMax,
+      ...(result && typeof result === 'object' ? result as Record<string, unknown> : {}),
+      result: 'processed',
+    });
   } catch (err) {
     dispatchDrainRuns += 1;
     lastDispatchDrain = {
@@ -1291,6 +1429,12 @@ async function runDispatchDrainTick(): Promise<void> {
       run_count: dispatchDrainRuns,
       reason: 'dispatch_drain_failed',
       error: lastDispatchDrain.last_error,
+    });
+    await decisionTrace('watcher.dispatch_tick', {
+      dispatch_max_per_tick: dispatchTickMax,
+      reason: 'dispatch_drain_failed',
+      error: lastDispatchDrain.last_error,
+      result: 'error',
     });
   }
 }
@@ -1317,9 +1461,24 @@ async function runWatcherCycle(): Promise<void> {
 
 async function tick(): Promise<void> {
   if (stopping) return;
-  if (await enforceLifecycleGuards()) return;
+  watcherTickSeq += 1;
+  const tickSeq = watcherTickSeq;
+  const traceId = watcherTraceId(tickSeq);
+  await decisionTrace('watcher.tick_start', {
+    trace_id: traceId,
+    tick_seq: tickSeq,
+    parent_pid: parentPid,
+    result: 'start',
+  });
+  if (await enforceLifecycleGuards(traceId, tickSeq)) return;
   await runWatcherCycle();
-  if (await enforceLifecycleGuards()) return;
+  await decisionTrace('watcher.tick_complete', {
+    trace_id: traceId,
+    tick_seq: tickSeq,
+    seen_turns: seenTurnKeys.size,
+    result: 'complete',
+  });
+  if (await enforceLifecycleGuards(traceId, tickSeq)) return;
   setTimeout(() => {
     void tick();
   }, pollMs);
@@ -1349,15 +1508,32 @@ async function main(): Promise<void> {
     pid_file: runOnce ? null : pidFilePath,
     max_lifetime_ms: maxLifetimeMs,
   });
+  await decisionTrace('watcher.start', {
+    trace_id: watcherTraceId(0),
+    cwd,
+    notify_script: notifyScript,
+    poll_ms: pollMs,
+    once: runOnce,
+    parent_pid: parentPid,
+    pid_file: runOnce ? null : pidFilePath,
+    max_lifetime_ms: maxLifetimeMs,
+    result: 'start',
+  });
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
 
-  if (await enforceLifecycleGuards()) return;
+  if (await enforceLifecycleGuards(watcherTraceId(0), 0)) return;
 
   if (runOnce) {
     await runWatcherCycle();
     await eventLog({ type: 'watcher_once_complete', seen_turns: seenTurnKeys.size });
+    await decisionTrace('watcher.stop_reason', {
+      trace_id: watcherTraceId(0),
+      reason: 'watcher_once_complete',
+      seen_turns: seenTurnKeys.size,
+      result: 'stop',
+    });
     process.exit(0);
   }
 
@@ -1370,6 +1546,12 @@ main().catch(async (err) => {
     type: 'watcher_error',
     reason: 'fatal',
     error: err instanceof Error ? err.message : safeString(err),
+  });
+  await decisionTrace('watcher.stop_reason', {
+    trace_id: watcherTraceId(watcherTickSeq || 0),
+    reason: 'fatal',
+    error: err instanceof Error ? err.message : safeString(err),
+    result: 'error',
   });
   process.exit(1);
 });

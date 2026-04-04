@@ -5,6 +5,11 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  buildDebugChildEnv,
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+} from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
@@ -23,23 +28,9 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 function buildFakeTmux(tmuxLogPath: string): string {
-  return `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%1 12345"
-  exit 0
-fi
-exit 0
-`;
+  return buildFakeTmuxScript(tmuxLogPath, {
+    listPaneLines: ['%1 12345'],
+  });
 }
 
 function runNotifyHookAsWorker(
@@ -58,9 +49,10 @@ function runNotifyHookAsWorker(
   };
 
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+    cwd,
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: buildIsolatedEnv({
+      ...buildDebugChildEnv(cwd),
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_WORKER: workerEnv,
       OMX_TEAM_WORKER_IDLE_COOLDOWN_MS: '500',
@@ -71,7 +63,7 @@ function runNotifyHookAsWorker(
       OMX_TEAM_STATE_ROOT: '',
       OMX_TEAM_LEADER_CWD: '',
       ...extraEnv,
-    },
+    }),
   });
 }
 

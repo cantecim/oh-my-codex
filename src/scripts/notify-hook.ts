@@ -36,7 +36,6 @@ import {
   readdir,
 } from './notify-hook/state-io.js';
 import { isLeaderStale, resolveLeaderStalenessThresholdMs, maybeNudgeTeamLeader } from './notify-hook/team-leader-nudge.js';
-import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
 import { handleTmuxInjection } from './notify-hook/tmux-injection.js';
 import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
 import {
@@ -368,14 +367,8 @@ async function main() {
     }
   }
 
-  // 5.5. Opportunistic team dispatch drain (leader session only).
-  if (!isTeamWorker) {
-    try {
-      await drainPendingTeamDispatch({ cwd, stateDir, logsDir, maxPerTick: 5 } as any);
-    } catch {
-      // Non-critical
-    }
-  }
+  // 5.5. Team dispatch drain is watcher-owned. Direct notify-hook turns should
+  // not opportunistically mutate dispatch queue state in leader context.
 
   // 6. Team leader nudge (lead session only): remind the leader to check teammate/mailbox state.
   if (!isTeamWorker && !deepInterviewStateActive) {

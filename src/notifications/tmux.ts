@@ -120,10 +120,11 @@ export function getTeamTmuxSessions(teamName: string): string[] {
 
   const prefix = `omx-team-${sanitized}`;
   try {
-    const output = execSync("tmux list-sessions -F '#{session_name}'", {
+    const output = execFileSync("tmux", ["list-sessions", "-F", "#{session_name}"], {
       encoding: "utf-8",
       timeout: 3000,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     return output
       .trim()

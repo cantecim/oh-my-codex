@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildTmuxSessionName } from '../../cli/index.js';
 import {
+  buildDebugChildEnv,
   buildFakeTmuxScript,
   buildIsolatedEnv,
   withTempDir,
@@ -113,6 +114,7 @@ function runNotifyHook(
     timeout: 15_000,
     env: {
       ...buildIsolatedEnv({
+      ...buildDebugChildEnv(cwd),
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
       ...(extraEnv.OMX_TEST_UNMANAGED_SESSION !== '1' && !extraEnv.OMX_TEAM_WORKER ? { OMX_SESSION_ID: 'sess-managed' } : {}),

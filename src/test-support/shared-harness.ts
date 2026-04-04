@@ -1,16 +1,42 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { collectTrackedEnv, recordEnvMutation, recordTempDirFixtureCreated, recordTempDirFixtureFinished } from './fixture-debug.js';
+import { appendDebugJsonl, isTestDebugEnabled, resolveDebugTestId, writeDebugJson } from '../debug/test-debug.js';
+
+const INHERITED_TEST_ENV_KEYS = [
+  'OMX_TEST_DEBUG',
+  'OMX_TEST_ARTIFACTS_DIR',
+  'OMX_TEST_DEBUG_TEST_ID',
+  'OMX_TEST_TRACE_ID',
+  'OMX_TEST_CAPTURE_FILE',
+  'OMX_TEST_CAPTURE_SEQUENCE_FILE',
+  'OMX_TEST_CAPTURE_COUNTER_FILE',
+];
 
 export async function withTempDir<T>(
   prefix: string,
   run: (dir: string) => Promise<T> | T,
 ): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
+  const debugEnabled = isTestDebugEnabled();
+  await recordTempDirFixtureCreated(dir, prefix);
   try {
     return await run(dir);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    if (debugEnabled) {
+      await recordTempDirFixtureFinished(dir);
+    } else {
+      await appendDebugJsonl(dir, 'lifecycle.jsonl', {
+        type: 'temp_dir_cleanup_started',
+        cwd: resolve(dir),
+      }).catch(() => {});
+      await rm(dir, { recursive: true, force: true });
+      await appendDebugJsonl(dir, 'lifecycle.jsonl', {
+        type: 'temp_dir_cleanup_finished',
+        cwd: resolve(dir),
+      }).catch(() => {});
+    }
   }
 }
 
@@ -26,6 +52,32 @@ export async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
+export async function writeTestArtifactManifest(
+  cwd: string,
+  manifest: Record<string, unknown>,
+): Promise<string | null> {
+  return await writeDebugJson(cwd, 'test-manifest.json', {
+    cwd: resolve(cwd),
+    ...manifest,
+  });
+}
+
+export function buildDebugChildEnv(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  if (!isTestDebugEnabled(env)) return {};
+  const debugEnv: Record<string, string> = {
+    OMX_TEST_DEBUG: '1',
+  };
+  const explicitTestId = typeof env.OMX_TEST_DEBUG_TEST_ID === 'string' ? env.OMX_TEST_DEBUG_TEST_ID.trim() : '';
+  debugEnv.OMX_TEST_DEBUG_TEST_ID = explicitTestId || resolveDebugTestId(cwd, env);
+  if (typeof env.OMX_TEST_ARTIFACTS_DIR === 'string' && env.OMX_TEST_ARTIFACTS_DIR.trim() !== '') {
+    debugEnv.OMX_TEST_ARTIFACTS_DIR = env.OMX_TEST_ARTIFACTS_DIR;
+  }
+  return debugEnv;
+}
+
 export async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf-8')) as T;
 }
@@ -34,6 +86,9 @@ export async function withEnv<T>(
   overrides: Record<string, string | undefined>,
   run: () => Promise<T> | T,
 ): Promise<T> {
+  const debugEnabled = isTestDebugEnabled();
+  const cwd = process.cwd();
+  const beforeSnapshot = debugEnabled ? collectTrackedEnv() : null;
   const previous = new Map<string, string | undefined>();
   for (const [key, value] of Object.entries(overrides)) {
     previous.set(key, process.env[key]);
@@ -47,6 +102,7 @@ export async function withEnv<T>(
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    await recordEnvMutation(cwd, debugEnabled ? beforeSnapshot : null);
   }
 }
 
@@ -71,6 +127,7 @@ export interface FakeTmuxScriptOptions {
   defaultProbe?: FakeTmuxProbeConfig;
   paneProbes?: Record<string, FakeTmuxProbeConfig>;
   listPaneLines?: string[];
+  sessionPaneLines?: string[];
   allPaneLines?: string[];
   failSendKeys?: boolean;
   failSendKeysMatch?: string;
@@ -119,7 +176,7 @@ function buildListPaneBlock(varName: string, values: string[] | undefined): stri
     return '';
   }
   const escaped = values.map((value) => escapePrintf(value)).join('\\n');
-  return `if [[ "${varName}" == "1" ]]; then
+  return `if [[ "$${varName}" == "1" ]]; then
     printf "%b\\n" "${escaped}"
     exit 0
   fi`;
@@ -132,6 +189,9 @@ export function buildFakeTmuxScript(
   const failSendKeys = options.failSendKeys === true ? '1' : '0';
   const failSendKeysMatch = options.failSendKeysMatch ? quoteBash(options.failSendKeysMatch) : '""';
   const unsupportedExitCode = options.unsupportedExitCode ?? 0;
+  const tmuxMetaPath = `${tmuxLogPath}.meta.jsonl`;
+  const defaultListPaneLines = options.listPaneLines ?? ['%1 12345'];
+  const defaultListPaneBlock = buildListPaneBlock('__tmux_default_list_panes', defaultListPaneLines);
   const defaultProbe: FakeTmuxProbeConfig = {
     paneInMode: '0',
     currentCommand: 'codex',
@@ -143,10 +203,30 @@ export function buildFakeTmuxScript(
 
   return `#!/usr/bin/env bash
 set -eu
+if [[ ! -f "${tmuxLogPath}" ]]; then : > "${tmuxLogPath}"; fi
+if [[ ! -f "${tmuxMetaPath}" ]]; then : > "${tmuxMetaPath}"; fi
+__tmux_exit_code=0
+__tmux_branch="startup"
+__tmux_cmd=""
+__tmux_meta() {
+  printf '{"timestamp":"%s","pid":%s,"ppid":%s,"cwd":"%s","cmd":"%s","branch":"%s","exit_code":%s,"invocation_id":"%s","command_role":"%s","raw_args_preview":"(see tmux.log)"}\\n' \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    "$$" \
+    "$PPID" \
+    "$PWD" \
+    "$__tmux_cmd" \
+    "$__tmux_branch" \
+    "$__tmux_exit_code" \
+    "\${OMX_TEST_TMUX_INVOCATION_ID:-}" \
+    "\${OMX_TEST_TMUX_COMMAND_ROLE:-}" >> "${tmuxMetaPath}"
+}
+trap '__tmux_exit_code=$?; __tmux_meta' EXIT
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
+__tmux_cmd="$cmd"
 shift || true
 if [[ "$cmd" == "capture-pane" ]]; then
+  __tmux_branch="capture-pane"
   if [[ -n "\${OMX_TEST_CAPTURE_SEQUENCE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" ]]; then
     counterFile="\${OMX_TEST_CAPTURE_COUNTER_FILE:-\${OMX_TEST_CAPTURE_SEQUENCE_FILE}.idx}"
     idx=0
@@ -166,6 +246,7 @@ if [[ "$cmd" == "capture-pane" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "display-message" ]]; then
+  __tmux_branch="display-message"
   target=""
   format=""
   while [[ "$#" -gt 0 ]]; do
@@ -179,6 +260,7 @@ if [[ "$cmd" == "display-message" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "send-keys" ]]; then
+  __tmux_branch="send-keys"
   sendKeysArgs="$*"
   if [[ "${failSendKeys}" == "1" ]]; then
     echo "send failed" >&2
@@ -191,19 +273,24 @@ if [[ "$cmd" == "send-keys" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  __tmux_branch="list-panes"
+  __tmux_default_list_panes=1
   allPanes=0
+  sessionPanes=0
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       -a) allPanes=1; shift ;;
+      -s) sessionPanes=1; shift ;;
       -F) shift 2 ;;
       -t) shift 2 ;;
       *) shift ;;
     esac
   done
   ${buildListPaneBlock('allPanes', options.allPaneLines)}
-  printf "%b\\n" "${escapePrintf((options.listPaneLines ?? ['%1 12345']).join('\\n'))}"
-  exit 0
+  ${buildListPaneBlock('sessionPanes', options.sessionPaneLines ?? options.listPaneLines)}
+  ${defaultListPaneBlock}
 fi
+__tmux_branch="fallback"
 exit ${unsupportedExitCode}
 `;
 }
@@ -233,11 +320,18 @@ export function buildIsolatedEnv(
     OMX_TEAM_STATE_ROOT: '',
     OMX_TEAM_LEADER_CWD: '',
     OMX_MODEL_INSTRUCTIONS_FILE: '',
+    OMX_TEST_DEBUG: process.env.OMX_TEST_DEBUG,
+    OMX_TEST_ARTIFACTS_DIR: process.env.OMX_TEST_ARTIFACTS_DIR,
+    OMX_TEST_DEBUG_TEST_ID: process.env.OMX_TEST_DEBUG_TEST_ID,
     TMUX: '',
     TMUX_PANE: '',
     ...overrides,
   };
 
+  for (const key of INHERITED_TEST_ENV_KEYS) {
+    const value = process.env[key];
+    if (env[key] === undefined && typeof value === 'string') env[key] = value;
+  }
+
   return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 }
-

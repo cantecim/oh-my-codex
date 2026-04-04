@@ -13,6 +13,11 @@ import { spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  buildDebugChildEnv,
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+} from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
@@ -37,57 +42,17 @@ async function readJson<T>(path: string): Promise<T> {
  *  paneInMode: '0' or '1' — the value returned for #{pane_in_mode}.
  */
 function fakeTmuxScript(cwd: string, paneInMode: '0' | '1'): string {
-  return `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%42 1"
-  exit 0
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" ]]; then
-    echo "codex --model gpt-5"
-    exit 0
-  fi
-  if [[ "$format" == "#S" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" ]]; then
-    echo "${paneInMode}"
-    exit 0
-  fi
-  echo "unsupported format: $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+  return buildFakeTmuxScript(join(cwd, 'tmux.log'), {
+    defaultProbe: {
+      paneId: '%42',
+      paneInMode,
+      currentPath: cwd,
+      currentCommand: 'node',
+      startCommand: 'codex --model gpt-5',
+      sessionName: 'devsess',
+    },
+    listPaneLines: ['%42 1'],
+  });
 }
 
 async function setupFixture(cwd: string, paneInMode: '0' | '1', skipIfScrolling = true) {
@@ -134,13 +99,14 @@ function runNotifyHook(cwd: string, fakeBinDir: string, threadId: string) {
     'last-assistant-message': 'output',
   };
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+    cwd,
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: buildIsolatedEnv({
+      ...buildDebugChildEnv(cwd),
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_WORKER: '',
       TMUX_PANE: '%42',
-    },
+    }),
   });
 }
 

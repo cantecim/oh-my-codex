@@ -2,11 +2,31 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
-import { fileURLToPath } from 'url';
 import { VISUAL_NEXT_ACTIONS_LIMIT } from '../../visual/constants.js';
+import { buildDebugChildEnv, buildIsolatedEnv } from '../../test-support/shared-harness.js';
+
+const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
+
+function runSessionScopedNotifyHook(
+  cwd: string,
+  payload: Record<string, unknown>,
+  extraEnv: Record<string, string> = {},
+) {
+  return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+    cwd,
+    encoding: 'utf-8',
+    env: buildIsolatedEnv({
+      ...buildDebugChildEnv(cwd),
+      OMX_TEAM_WORKER: '',
+      TMUX: '',
+      TMUX_PANE: '',
+      ...extraEnv,
+    }),
+  });
+}
 
 describe('notify-hook session-scoped iteration updates', () => {
   it('increments iteration for active session-scoped mode states', async () => {
@@ -29,18 +49,7 @@ describe('notify-hook session-scoped iteration updates', () => {
         last_assistant_message: 'ok',
       };
 
-      const testDir = dirname(fileURLToPath(import.meta.url));
-      const repoRoot = join(testDir, '..', '..', '..');
-      const result = spawnSync(process.execPath, ['dist/scripts/notify-hook.js', JSON.stringify(payload)], {
-        cwd: repoRoot,
-        encoding: 'utf-8',
-        env: {
-          ...process.env,
-          OMX_TEAM_WORKER: '',
-          TMUX: '',
-          TMUX_PANE: '',
-        },
-      });
+      const result = runSessionScopedNotifyHook(wd, payload);
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const updated = JSON.parse(await readFile(join(sessionScopedDir, 'team-state.json'), 'utf-8'));
@@ -79,18 +88,7 @@ describe('notify-hook session-scoped iteration updates', () => {
         last_assistant_message: 'ok',
       };
 
-      const testDir = dirname(fileURLToPath(import.meta.url));
-      const repoRoot = join(testDir, '..', '..', '..');
-      const result = spawnSync(process.execPath, ['dist/scripts/notify-hook.js', JSON.stringify(payload)], {
-        cwd: repoRoot,
-        encoding: 'utf-8',
-        env: {
-          ...process.env,
-          OMX_TEAM_WORKER: '',
-          TMUX: '',
-          TMUX_PANE: '',
-        },
-      });
+      const result = runSessionScopedNotifyHook(wd, payload);
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const updated = JSON.parse(await readFile(join(sessionScopedDir, 'ralph-state.json'), 'utf-8'));
@@ -136,18 +134,7 @@ describe('notify-hook session-scoped iteration updates', () => {
         last_assistant_message: 'ok',
       };
 
-      const testDir = dirname(fileURLToPath(import.meta.url));
-      const repoRoot = join(testDir, '..', '..', '..');
-      const result = spawnSync(process.execPath, ['dist/scripts/notify-hook.js', JSON.stringify(payload)], {
-        cwd: repoRoot,
-        encoding: 'utf-8',
-        env: {
-          ...process.env,
-          OMX_TEAM_WORKER: '',
-          TMUX: '',
-          TMUX_PANE: '',
-        },
-      });
+      const result = runSessionScopedNotifyHook(wd, payload);
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const updated = JSON.parse(await readFile(join(sessionScopedDir, 'team-state.json'), 'utf-8'));
@@ -194,18 +181,7 @@ describe('notify-hook session-scoped iteration updates', () => {
         ].join('\n'),
       };
 
-      const testDir = dirname(fileURLToPath(import.meta.url));
-      const repoRoot = join(testDir, '..', '..', '..');
-      const result = spawnSync(process.execPath, ['dist/scripts/notify-hook.js', JSON.stringify(payload)], {
-        cwd: repoRoot,
-        encoding: 'utf-8',
-        env: {
-          ...process.env,
-          OMX_TEAM_WORKER: '',
-          TMUX: '',
-          TMUX_PANE: '',
-        },
-      });
+      const result = runSessionScopedNotifyHook(wd, payload);
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const progressPath = join(wd, '.omx', 'state', 'sessions', sessionId, 'ralph-progress.json');

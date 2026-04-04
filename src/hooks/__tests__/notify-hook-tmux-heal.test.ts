@@ -5,8 +5,11 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  buildDebugChildEnv,
+  buildIsolatedEnv,
   readJson,
   withTempDir,
+  writeTestArtifactManifest,
   writeJson,
 } from '../../test-support/shared-harness.js';
 
@@ -15,7 +18,52 @@ const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', impor
 const withTempWorkingDir = (run: (cwd: string) => Promise<void>): Promise<void> =>
   withTempDir('omx-notify-tmux-heal-', run);
 
-describe('notify-hook tmux target healing', () => {
+function runTmuxHealNotifyHook(
+  cwd: string,
+  fakeBinDir: string,
+  payloadOverrides: Record<string, unknown> = {},
+  extraEnv: Record<string, string> = {},
+): ReturnType<typeof spawnSync> {
+  const payload = {
+    cwd,
+    type: 'agent-turn-complete',
+    'thread-id': 'thread-test',
+    'turn-id': `turn-${Date.now()}`,
+    'input-messages': ['no marker here'],
+    'last-assistant-message': 'output',
+    ...payloadOverrides,
+  };
+
+  return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+    cwd,
+    encoding: 'utf8',
+    env: buildIsolatedEnv({
+      ...buildDebugChildEnv(cwd),
+      PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+      OMX_TEAM_WORKER: '',
+      ...extraEnv,
+    }),
+  });
+}
+
+async function prepareTmuxHealHarness(
+  cwd: string,
+  fakeBinDir: string,
+  manifest: Record<string, unknown> = {},
+): Promise<{ fakeTmuxPath: string; tmuxLogPath: string }> {
+  const fakeTmuxPath = join(fakeBinDir, 'tmux');
+  const tmuxLogPath = join(cwd, 'tmux.log');
+  await writeFile(tmuxLogPath, '');
+  await writeTestArtifactManifest(cwd, {
+    suite: 'notify-hook-tmux-heal',
+    fake_tmux_path: fakeTmuxPath,
+    tmux_log_path: tmuxLogPath,
+    ...manifest,
+  });
+  return { fakeTmuxPath, tmuxLogPath };
+}
+
+describe('notify-hook tmux target healing', { concurrency: false }, () => {
   it('falls back to global mode state when scoped session has no allowed active mode', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
@@ -24,13 +72,15 @@ describe('notify-hook tmux target healing', () => {
       const sessionId = 'omx-abc123';
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
-      const fakeTmuxPath = join(fakeBinDir, 'tmux');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
+      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+        case: 'cwd-mismatch-fallback-pane',
+      });
 
       await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
       await writeJson(join(sessionStateDir, 'team-state.json'), { active: true, current_phase: 'team-exec' });
@@ -85,23 +135,10 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         session_id: sessionId,
         'thread-id': 'thread-test-global-fallback',
         'turn-id': 'turn-test-global-fallback',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-        },
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -119,13 +156,15 @@ exit 1
       const sessionId = 'omx-abc123';
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
-      const fakeTmuxPath = join(fakeBinDir, 'tmux');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
+      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+        case: 'stale-hud-heal',
+      });
 
       await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
@@ -210,23 +249,11 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         'thread-id': 'thread-test',
         'turn-id': 'turn-test',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%42',
-        },
+      }, {
+        TMUX_PANE: '%42',
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -248,13 +275,15 @@ exit 1
       const sessionId = 'omx-abc123';
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
-      const fakeTmuxPath = join(fakeBinDir, 'tmux');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
+      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+        case: 'active-mode-pane-id',
+      });
 
       await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
@@ -339,23 +368,11 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         'thread-id': 'thread-test-2',
         'turn-id': 'turn-test-2',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%42',
-        },
+      }, {
+        TMUX_PANE: '%42',
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -373,13 +390,15 @@ exit 1
       const sessionId = 'omx-abc123';
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
-      const fakeTmuxPath = join(fakeBinDir, 'tmux');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
+      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+        case: 'scoped-mode-pane-precedence',
+      });
 
       await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
@@ -455,22 +474,9 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         'thread-id': 'thread-test-3',
         'turn-id': 'turn-test-3',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-        },
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -488,13 +494,15 @@ exit 1
       const sessionId = 'omx-hud-stale';
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
-      const fakeTmuxPath = join(fakeBinDir, 'tmux');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
+      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+        case: 'busy-pane-skip',
+      });
 
       await writeJson(join(stateDir, 'session.json'), { session_id: sessionId });
       await writeJson(join(sessionStateDir, 'ralph-state.json'), { active: true, iteration: 0 });
@@ -566,24 +574,12 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         session_id: sessionId,
         'thread-id': 'thread-test-hud-heal',
         'turn-id': 'turn-test-hud-heal',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%99',
-        },
+      }, {
+        TMUX_PANE: '%99',
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -688,23 +684,11 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         'thread-id': 'thread-test',
         'turn-id': 'turn-test',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%42',
-        },
+      }, {
+        TMUX_PANE: '%42',
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -809,23 +793,11 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         'thread-id': 'thread-test-2',
         'turn-id': 'turn-test-2',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%42',
-        },
+      }, {
+        TMUX_PANE: '%42',
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -921,24 +893,12 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         session_id: sessionId,
         'thread-id': 'thread-test-hud-heal',
         'turn-id': 'turn-test-hud-heal',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%99',
-        },
+      }, {
+        TMUX_PANE: '%99',
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -1028,22 +988,9 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         'thread-id': 'thread-test-4',
         'turn-id': 'turn-test-4',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-        },
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -1146,23 +1093,10 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         session_id: sessionId,
         'thread-id': 'thread-test-scoped-pane-precedence',
         'turn-id': 'turn-test-scoped-pane-precedence',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-        },
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
@@ -1252,23 +1186,10 @@ exit 1
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
-      const payload = {
-        cwd,
-        type: 'agent-turn-complete',
+      const result = runTmuxHealNotifyHook(cwd, fakeBinDir, {
         session_id: sessionId,
         'thread-id': 'thread-test-busy-pane',
         'turn-id': 'turn-test-busy-pane',
-        'input-messages': ['no marker here'],
-        'last-assistant-message': 'output',
-      };
-
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-        },
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 

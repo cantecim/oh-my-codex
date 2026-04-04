@@ -8,6 +8,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { safeString, asNumber } from './utils.js';
+import { buildRuntimeTraceId, traceDecision as appendRuntimeDecisionTrace } from '../../debug/runtime-trace.js';
 import {
   readJsonIfExists,
   normalizeTmuxState,
@@ -28,6 +29,18 @@ import {
 
 function isHudPaneStartCommand(startCommand: any): boolean {
   return /\bomx\b.*\bhud\b.*--watch/i.test(safeString(startCommand));
+}
+
+async function decisionTrace(cwd: string, event: string, payload: Record<string, unknown> = {}): Promise<void> {
+  await appendRuntimeDecisionTrace(cwd, 'tmux-injection', event, payload).catch(() => {});
+}
+
+function tmuxInjectionTraceId(target: any, turnId = ''): string {
+  return buildRuntimeTraceId('tmux-injection', safeString(turnId).trim() || safeString(target?.value || target).trim() || 'unknown');
+}
+
+function shouldReturnResolvedPane(result: any): boolean {
+  return Boolean(result?.paneTarget) || safeString(result?.reason).trim() === 'pane_cwd_mismatch';
 }
 
 async function resolvePaneCwdMismatch(paneId: string, expectedCwd: any): Promise<any | null> {
@@ -67,9 +80,38 @@ async function finalizeResolvedPane(paneId: string, reason: string, expectedCwd:
 }
 
 async function resolveCanonicalPaneFromPaneTarget(paneTarget: any, expectedCwd: any): Promise<any> {
+  const traceId = tmuxInjectionTraceId(paneTarget);
+  const cwd = process.cwd();
+  await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+    trace_id: traceId,
+    candidate_source: 'pane_target',
+    target_type: 'pane',
+    target_value: safeString(paneTarget).trim(),
+    expected_cwd: safeString(expectedCwd).trim(),
+    result: 'start',
+  });
   const paneResult = await runProcess('tmux', ['display-message', '-p', '-t', paneTarget, '#{pane_id}']);
-  const paneId = safeString(paneResult.stdout).trim();
-  if (!paneId) return { paneTarget: null, reason: 'target_not_found' };
+  const rawPaneTarget = safeString(paneTarget).trim();
+  const paneId = safeString(paneResult.stdout).trim() || (/^%\d+$/.test(rawPaneTarget) ? rawPaneTarget : '');
+  if (!paneId) {
+    await decisionTrace(cwd, 'tmux_injection.resolve_target_rejected', {
+      trace_id: traceId,
+      candidate_source: 'pane_target',
+      target_type: 'pane',
+      target_value: safeString(paneTarget).trim(),
+      reason: 'target_not_found',
+      result: 'rejected',
+    });
+    return { paneTarget: null, reason: 'target_not_found' };
+  }
+  await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+    trace_id: traceId,
+    candidate_source: 'pane_target',
+    target_type: 'pane',
+    target_value: safeString(paneTarget).trim(),
+    pane_target: paneId,
+    result: 'resolved',
+  });
 
   let startCommand = '';
   try {
@@ -81,6 +123,14 @@ async function resolveCanonicalPaneFromPaneTarget(paneTarget: any, expectedCwd: 
   if (!startCommand || !isHudPaneStartCommand(startCommand)) {
     return finalizeResolvedPane(paneId, 'ok', expectedCwd);
   }
+  await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+    trace_id: traceId,
+    candidate_source: 'hud_pane_target',
+    target_type: 'pane',
+    target_value: paneId,
+    pane_start_command: startCommand,
+    result: 'hud_detected',
+  });
 
   let sessionName = '';
   try {
@@ -89,10 +139,80 @@ async function resolveCanonicalPaneFromPaneTarget(paneTarget: any, expectedCwd: 
   } catch {
     sessionName = '';
   }
-  if (!sessionName) return { paneTarget: null, reason: 'target_is_hud_pane' };
+  if (!sessionName) {
+    await decisionTrace(cwd, 'tmux_injection.resolve_target_rejected', {
+      trace_id: traceId,
+      candidate_source: 'hud_pane_target',
+      target_type: 'pane',
+      target_value: safeString(paneTarget).trim(),
+      reason: 'target_is_hud_pane',
+      result: 'rejected',
+    });
+    return { paneTarget: null, reason: 'target_is_hud_pane' };
+  }
+  await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+    trace_id: traceId,
+    candidate_source: 'hud_session_heal',
+    target_type: 'session',
+    target_value: sessionName,
+    matched_session: sessionName,
+    result: 'start',
+  });
 
   const healedPaneId = await resolveSessionToPane(sessionName);
-  if (!healedPaneId) return { paneTarget: null, reason: 'target_is_hud_pane' };
+  if (!healedPaneId) {
+    const rawCurrentPane = safeString(process.env.TMUX_PANE).trim();
+    if (rawCurrentPane && rawCurrentPane !== paneId) {
+      await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+        trace_id: traceId,
+        candidate_source: 'tmux_pane_env_fallback',
+        target_type: 'pane',
+        target_value: rawCurrentPane,
+        matched_session: sessionName,
+        result: 'start',
+      });
+      try {
+        const currentSessionResult = await runProcess('tmux', ['display-message', '-p', '-t', rawCurrentPane, '#S']);
+        const currentSessionName = safeString(currentSessionResult.stdout).trim();
+        if (currentSessionName && currentSessionName === sessionName) {
+          const healedFromCurrentPane = await finalizeResolvedPane(rawCurrentPane, 'healed_hud_to_tmux_pane_env', expectedCwd);
+          if (healedFromCurrentPane.paneTarget) {
+            await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+              trace_id: traceId,
+              candidate_source: 'tmux_pane_env_fallback',
+              target_type: 'pane',
+              target_value: rawCurrentPane,
+              pane_target: healedFromCurrentPane.paneTarget,
+              matched_session: sessionName,
+              result: 'resolved',
+            });
+            return healedFromCurrentPane;
+          }
+        }
+      } catch {
+        // Fall through to target_is_hud_pane rejection.
+      }
+    }
+    await decisionTrace(cwd, 'tmux_injection.resolve_target_rejected', {
+      trace_id: traceId,
+      candidate_source: 'hud_session_heal',
+      target_type: 'session',
+      target_value: sessionName,
+      matched_session: sessionName,
+      reason: 'target_is_hud_pane',
+      result: 'rejected',
+    });
+    return { paneTarget: null, reason: 'target_is_hud_pane' };
+  }
+  await decisionTrace(cwd, 'tmux_injection.resolve_target_candidate', {
+    trace_id: traceId,
+    candidate_source: 'hud_session_heal',
+    target_type: 'session',
+    target_value: sessionName,
+    pane_target: healedPaneId,
+    matched_session: sessionName,
+    result: 'resolved',
+  });
   return finalizeResolvedPane(healedPaneId, 'healed_hud_pane_target', expectedCwd);
 }
 
@@ -115,6 +235,17 @@ export async function resolveSessionToPane(sessionName: any): Promise<string | n
       };
     })
     .filter((row: any) => row.paneId.startsWith('%'));
+  await decisionTrace(process.cwd(), 'tmux_injection.resolve_session_rows', {
+    session_name: safeString(sessionName).trim(),
+    row_count: rows.length,
+    rows: rows.map((row: any) => ({
+      pane_id: row.paneId,
+      active: row.active,
+      current_command: row.currentCommand,
+      start_command: row.startCommand,
+    })),
+    result: rows.length > 0 ? 'observed' : 'empty',
+  });
   if (rows.length === 0) return null;
 
   const nonHudRows = rows.filter((row: any) => !isHudPaneStartCommand(row.startCommand));
@@ -129,10 +260,53 @@ export async function resolveSessionToPane(sessionName: any): Promise<string | n
 }
 
 export async function resolvePaneTarget(target: any, fallbackPane: any, expectedCwd: any, modePane: any): Promise<any> {
+  const traceId = tmuxInjectionTraceId(target);
+  await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_start', {
+    trace_id: traceId,
+    target,
+    fallback_pane: safeString(fallbackPane).trim(),
+    tmux_pane_env: safeString(process.env.TMUX_PANE).trim(),
+    expected_cwd: safeString(expectedCwd).trim(),
+    mode_pane: safeString(modePane).trim(),
+    result: 'start',
+  });
   const canonicalFallbackPane = safeString(fallbackPane).trim();
   if (canonicalFallbackPane) {
     try {
-      return await finalizeResolvedPane(canonicalFallbackPane, 'fallback_current_pane', expectedCwd);
+      const resolved = await finalizeResolvedPane(canonicalFallbackPane, 'fallback_current_pane', expectedCwd);
+      await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_result', {
+        trace_id: traceId,
+        pane_target: resolved.paneTarget,
+        candidate_source: 'fallback_current_pane',
+        reason: resolved.reason,
+        matched_session: resolved.matched_session,
+        result: resolved.paneTarget ? 'resolved' : 'skipped',
+      });
+      return resolved;
+    } catch {
+      // Fall through to mode/config probes
+    }
+  }
+
+  const rawCurrentPane = safeString(process.env.TMUX_PANE).trim();
+  if (rawCurrentPane && rawCurrentPane !== canonicalFallbackPane) {
+    try {
+      const resolved = await resolveCanonicalPaneFromPaneTarget(rawCurrentPane, expectedCwd);
+      if (shouldReturnResolvedPane(resolved)) {
+        const result = {
+          ...resolved,
+          reason: resolved.reason === 'ok' ? 'fallback_tmux_pane_env' : resolved.reason,
+        };
+        await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_result', {
+          trace_id: traceId,
+          pane_target: result.paneTarget,
+          candidate_source: 'fallback_tmux_pane_env',
+          reason: result.reason,
+          matched_session: result.matched_session,
+          result: 'resolved',
+        });
+        return result;
+      }
     } catch {
       // Fall through to mode/config probes
     }
@@ -141,11 +315,20 @@ export async function resolvePaneTarget(target: any, fallbackPane: any, expected
   if (modePane) {
     try {
       const resolved = await resolveCanonicalPaneFromPaneTarget(modePane, expectedCwd);
-      if (resolved.paneTarget) {
-        return {
+      if (shouldReturnResolvedPane(resolved)) {
+        const result = {
           ...resolved,
           reason: resolved.reason === 'ok' ? 'fallback_mode_state_pane' : resolved.reason,
         };
+        await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_result', {
+          trace_id: traceId,
+          pane_target: result.paneTarget,
+          candidate_source: 'fallback_mode_state_pane',
+          reason: result.reason,
+          matched_session: result.matched_session,
+          result: 'resolved',
+        });
+        return result;
       }
     } catch {
       // Fall through to config probes
@@ -157,20 +340,49 @@ export async function resolvePaneTarget(target: any, fallbackPane: any, expected
   if (target.type === 'pane') {
     try {
       const resolved = await resolveCanonicalPaneFromPaneTarget(target.value, expectedCwd);
-      if (resolved.paneTarget) return resolved;
+      if (shouldReturnResolvedPane(resolved)) {
+        await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_result', {
+          trace_id: traceId,
+          pane_target: resolved.paneTarget,
+          candidate_source: 'explicit_pane_target',
+          reason: resolved.reason,
+          matched_session: resolved.matched_session,
+          result: 'resolved',
+        });
+        return resolved;
+      }
     } catch {
       // Fall through
     }
   } else {
     try {
       const paneId = await resolveSessionToPane(target.value);
-      if (paneId) return await finalizeResolvedPane(paneId, 'ok', expectedCwd);
+      if (paneId) {
+        const resolved = await finalizeResolvedPane(paneId, 'ok', expectedCwd);
+        await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_result', {
+          trace_id: traceId,
+          pane_target: resolved.paneTarget,
+          candidate_source: 'session_target',
+          reason: resolved.reason,
+          matched_session: resolved.matched_session,
+          result: 'resolved',
+        });
+        return resolved;
+      }
     } catch {
       // Fall through
     }
   }
 
-  return { paneTarget: null, reason: 'target_not_found' };
+  const result = { paneTarget: null, reason: 'target_not_found' };
+  await decisionTrace(process.cwd(), 'tmux_injection.resolve_target_result', {
+    trace_id: traceId,
+    pane_target: null,
+    candidate_source: 'final',
+    reason: result.reason,
+    result: 'missing',
+  });
+  return result;
 }
 
 export async function handleTmuxInjection({
@@ -236,6 +448,12 @@ export async function handleTmuxInjection({
   }
 
   const mode = pickActiveMode(activeModes, config.allowed_modes);
+  await decisionTrace(cwd, 'tmux_injection.mode_scan', {
+    active_modes: activeModes,
+    allowed_modes: config.allowed_modes,
+    selected_mode: mode,
+    result: mode ? 'selected' : 'none',
+  });
   const modeState = mode ? (activeModeStates[mode] || {}) : {};
   const modePane = safeString(modeState.tmux_pane_id || '');
   const preGuard = evaluateInjectionGuards({
@@ -270,6 +488,11 @@ export async function handleTmuxInjection({
     if (config.enabled || config.log_level === 'debug') {
       await logTmuxHookEvent(logsDir, { ...baseLog, event: 'injection_skipped' });
     }
+    await decisionTrace(cwd, 'tmux_injection.guard_result', {
+      reason: preGuard.reason,
+      pane_target: null,
+      result: 'skipped',
+    });
     return;
   }
 
@@ -293,6 +516,13 @@ export async function handleTmuxInjection({
       pane_cwd: resolution.pane_cwd,
       expected_cwd: resolution.expected_cwd,
     });
+    await decisionTrace(cwd, 'tmux_injection.resolve_target_result', {
+      pane_target: null,
+      reason: resolution.reason,
+      pane_cwd: resolution.pane_cwd,
+      expected_cwd: resolution.expected_cwd,
+      result: 'missing',
+    });
     return;
   }
   const paneTarget = resolution.paneTarget;
@@ -315,6 +545,11 @@ export async function handleTmuxInjection({
     state.last_event_at = nowIso;
     await writeFile(hookStatePath, JSON.stringify(state, null, 2)).catch(() => {});
     await logTmuxHookEvent(logsDir, { ...baseLog, event: 'injection_skipped', reason: guard.reason });
+    await decisionTrace(cwd, 'tmux_injection.guard_result', {
+      pane_target: paneTarget,
+      reason: guard.reason,
+      result: 'skipped',
+    });
     return;
   }
 
@@ -377,6 +612,13 @@ export async function handleTmuxInjection({
         pane_current_command: paneGuard.paneCurrentCommand || undefined,
         pane_capture_excerpt: paneGuard.paneCapture ? paneGuard.paneCapture.slice(-200) : undefined,
       });
+      await decisionTrace(cwd, 'tmux_injection.guard_result', {
+        pane_target: paneTarget,
+        reason,
+        pane_current_command: paneGuard.paneCurrentCommand || undefined,
+        pane_capture_excerpt: paneGuard.paneCapture ? paneGuard.paneCapture.slice(-200) : undefined,
+        result: 'skipped',
+      });
       return;
     }
   } catch {
@@ -392,6 +634,12 @@ export async function handleTmuxInjection({
       reason: 'dry_run',
       pane_target: paneTarget,
       argv,
+    });
+    await decisionTrace(cwd, 'tmux_injection.send_result', {
+      pane_target: paneTarget,
+      reason: 'dry_run',
+      argv,
+      result: 'dry_run',
     });
     return;
   }
@@ -416,6 +664,12 @@ export async function handleTmuxInjection({
       sent: true,
       argv,
     });
+    await decisionTrace(cwd, 'tmux_injection.send_result', {
+      pane_target: paneTarget,
+      reason: 'ok',
+      argv,
+      result: 'sent',
+    });
   } catch (err) {
     updateStateForAttempt(false, 'send_failed');
     await writeFile(hookStatePath, JSON.stringify(state, null, 2)).catch(() => {});
@@ -425,6 +679,12 @@ export async function handleTmuxInjection({
       reason: 'send_failed',
       pane_target: paneTarget,
       error: err instanceof Error ? err.message : safeString(err),
+    });
+    await decisionTrace(cwd, 'tmux_injection.send_result', {
+      pane_target: paneTarget,
+      reason: 'send_failed',
+      error: err instanceof Error ? err.message : safeString(err),
+      result: 'error',
     });
   }
 }
