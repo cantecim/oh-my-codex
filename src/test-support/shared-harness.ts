@@ -4,7 +4,9 @@ import { dirname, join, resolve } from 'node:path';
 import { collectTrackedEnv, recordEnvMutation, recordTempDirFixtureCreated, recordTempDirFixtureFinished } from './fixture-debug.js';
 import { appendDebugJsonl, isTestDebugEnabled, resolveDebugTestId, writeDebugJson } from '../debug/test-debug.js';
 
-const INHERITED_TEST_ENV_KEYS = [
+// Intentional test-only whitelist. These are the only OMX_TEST_* keys that
+// auto-forward through the isolation contract.
+export const AUTO_FORWARDED_TEST_ENV_KEYS = [
   'OMX_TEST_DEBUG',
   'OMX_TEST_ARTIFACTS_DIR',
   'OMX_TEST_DEBUG_TEST_ID',
@@ -12,7 +14,27 @@ const INHERITED_TEST_ENV_KEYS = [
   'OMX_TEST_CAPTURE_FILE',
   'OMX_TEST_CAPTURE_SEQUENCE_FILE',
   'OMX_TEST_CAPTURE_COUNTER_FILE',
-];
+] as const;
+
+// Runtime-affecting env that should never leak implicitly between tests.
+// These are reset-by-default and only flow to children via explicit overrides.
+export const RESET_BY_DEFAULT_RUNTIME_ENV_KEYS = [
+  'TMUX',
+  'TMUX_PANE',
+  'OMX_TEAM_WORKER',
+  'OMX_TEAM_STATE_ROOT',
+  'OMX_TEAM_LEADER_CWD',
+  'OMX_MODEL_INSTRUCTIONS_FILE',
+] as const;
+
+// Runtime selectors that remain opt-in even though the base isolated env still
+// preserves host PATH compatibility. Tests must pass these explicitly when they
+// intend to exercise an alternate transport/runtime path.
+export const EXPLICIT_RUNTIME_ENV_KEYS = [
+  'PATH',
+  'OMX_RUNTIME_BINARY',
+  'CODEX_HOME',
+] as const;
 
 export async function withTempDir<T>(
   prefix: string,
@@ -76,6 +98,17 @@ export function buildDebugChildEnv(
     debugEnv.OMX_TEST_ARTIFACTS_DIR = env.OMX_TEST_ARTIFACTS_DIR;
   }
   return debugEnv;
+}
+
+export function buildChildEnv(
+  cwd: string,
+  overrides: Record<string, string | undefined> = {},
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return buildIsolatedEnv({
+    ...buildDebugChildEnv(cwd, env),
+    ...overrides,
+  }, env);
 }
 
 export async function readJson<T>(path: string): Promise<T> {
@@ -248,6 +281,9 @@ __tmux_cmd="$cmd"
 shift || true
 if [[ "$cmd" == "capture-pane" ]]; then
   __tmux_branch="capture-pane"
+  # OMX_TEST_CAPTURE_* is an intentional test contract. These are not runtime
+  # selectors and are the only ambient env inputs this helper is allowed to
+  # read without per-call options.
   if [[ -n "\${OMX_TEST_CAPTURE_SEQUENCE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_SEQUENCE_FILE}" ]]; then
     counterFile="\${OMX_TEST_CAPTURE_COUNTER_FILE:-\${OMX_TEST_CAPTURE_SEQUENCE_FILE}.idx}"
     idx=0
@@ -342,37 +378,38 @@ function currentHomeDir(): string {
 
 export function buildIsolatedEnv(
   overrides: Record<string, string | undefined> = {},
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const env: Record<string, string | undefined> = {
+  const isolatedEnv: Record<string, string | undefined> = {
     HOME: currentHomeDir(),
-    PATH: process.env.PATH,
-    TMPDIR: process.env.TMPDIR,
-    TMP: process.env.TMP,
-    TEMP: process.env.TEMP,
-    TZ: process.env.TZ,
-    LANG: process.env.LANG,
-    LC_ALL: process.env.LC_ALL,
-    TERM: process.env.TERM,
-    SystemRoot: process.env.SystemRoot,
-    ComSpec: process.env.ComSpec,
-    PATHEXT: process.env.PATHEXT,
-    windir: process.env.windir,
+    PATH: inheritedEnv.PATH,
+    TMPDIR: inheritedEnv.TMPDIR,
+    TMP: inheritedEnv.TMP,
+    TEMP: inheritedEnv.TEMP,
+    TZ: inheritedEnv.TZ,
+    LANG: inheritedEnv.LANG,
+    LC_ALL: inheritedEnv.LC_ALL,
+    TERM: inheritedEnv.TERM,
+    SystemRoot: inheritedEnv.SystemRoot,
+    ComSpec: inheritedEnv.ComSpec,
+    PATHEXT: inheritedEnv.PATHEXT,
+    windir: inheritedEnv.windir,
     OMX_TEAM_WORKER: '',
     OMX_TEAM_STATE_ROOT: '',
     OMX_TEAM_LEADER_CWD: '',
     OMX_MODEL_INSTRUCTIONS_FILE: '',
-    OMX_TEST_DEBUG: process.env.OMX_TEST_DEBUG,
-    OMX_TEST_ARTIFACTS_DIR: process.env.OMX_TEST_ARTIFACTS_DIR,
-    OMX_TEST_DEBUG_TEST_ID: process.env.OMX_TEST_DEBUG_TEST_ID,
+    OMX_TEST_DEBUG: inheritedEnv.OMX_TEST_DEBUG,
+    OMX_TEST_ARTIFACTS_DIR: inheritedEnv.OMX_TEST_ARTIFACTS_DIR,
+    OMX_TEST_DEBUG_TEST_ID: inheritedEnv.OMX_TEST_DEBUG_TEST_ID,
     TMUX: '',
     TMUX_PANE: '',
     ...overrides,
   };
 
-  for (const key of INHERITED_TEST_ENV_KEYS) {
-    const value = process.env[key];
-    if (env[key] === undefined && typeof value === 'string') env[key] = value;
+  for (const key of AUTO_FORWARDED_TEST_ENV_KEYS) {
+    const value = inheritedEnv[key];
+    if (isolatedEnv[key] === undefined && typeof value === 'string') isolatedEnv[key] = value;
   }
 
-  return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
+  return Object.fromEntries(Object.entries(isolatedEnv).filter(([, value]) => value !== undefined));
 }

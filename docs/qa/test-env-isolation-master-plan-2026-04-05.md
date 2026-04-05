@@ -401,6 +401,31 @@ Drift özel notu:
 - normal debug-off full suite primary acceptance'tır
 - debug-open yalnız teşhis amaçlı kalır
 
+## Static Search Recipe
+
+Pass 2 ve sonrası review/checklist için kullanılacak minimum taramalar:
+
+```bash
+rg -n "env:\\s*process\\.env|\\.\\.\\.process\\.env" src
+rg -n "process\\.env\\.(PATH|OMX_RUNTIME_BINARY|TMUX|TMUX_PANE)\\s*=|delete process\\.env\\.(PATH|OMX_RUNTIME_BINARY|TMUX|TMUX_PANE)" src
+rg -n "process\\.chdir\\(" src
+rg -n "spawn(Sync)?\\(" src/hooks src/team src/mcp src/cli
+```
+
+Yorumlama:
+
+- hit görmek tek başına hata değildir
+- ama her hit şu soruyu cevaplamak zorundadır:
+  - bu env/state neden same-process mutation ile çözülüyor?
+  - child-process + isolated env ile çözülemiyor mu?
+  - restore/disposal explicit ve test-covered mı?
+
+Geçici istisna modeli:
+
+- same-process mutation yalnız documented temporary fallback ise kabul edilir
+- restore path'i aynı test içinde görünür olmalıdır
+- Pass 3 sonuna kadar child-process modele taşınamayan istisnalar dosya içinde kısa notla gerekçelendirilmelidir
+
 ## Review Checklist
 
 Bir PR bu plana uyumlu mu diye bakarken:
