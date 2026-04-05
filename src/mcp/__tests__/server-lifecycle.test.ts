@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { join } from 'node:path';
+import { buildChildEnv } from '../../test-support/shared-harness.js';
 
 const STARTUP_SETTLE_MS = 150;
 const SPAWN_TIMEOUT_MS = 1_500;
@@ -111,7 +112,7 @@ function spawnEntrypoint(entrypoint: EntryPoint): {
 } {
   const child = spawn(process.execPath, [join(process.cwd(), 'dist', 'mcp', entrypoint.file)], {
     cwd: process.cwd(),
-    env: { ...process.env },
+    env: buildChildEnv(process.cwd()),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 

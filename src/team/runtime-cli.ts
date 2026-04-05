@@ -234,21 +234,21 @@ async function main(): Promise<void> {
   const agentType = 'executor';
   try {
     const providers = normalizeAgentTypes(agentTypes, workerCount);
-    const previousCliMap = process.env.OMX_TEAM_WORKER_CLI_MAP;
-    try {
-      process.env.OMX_TEAM_WORKER_CLI_MAP = providers.join(',');
-      runtime = await startTeam(
-        teamName,
-        tasks.map(t => t.subject).join('; '),
-        agentType,
-        workerCount,
-        tasks,
-        cwd,
-      );
-    } finally {
-      if (typeof previousCliMap === 'string') process.env.OMX_TEAM_WORKER_CLI_MAP = previousCliMap;
-      else delete process.env.OMX_TEAM_WORKER_CLI_MAP;
-    }
+    const leaderEnvSnapshot = Object.fromEntries(
+      Object.entries(process.env),
+    ) as NodeJS.ProcessEnv;
+    leaderEnvSnapshot.OMX_TEAM_WORKER_CLI_MAP = providers.join(',');
+    runtime = await startTeam(
+      teamName,
+      tasks.map(t => t.subject).join('; '),
+      agentType,
+      workerCount,
+      tasks,
+      cwd,
+      {
+        leaderEnvSnapshot,
+      },
+    );
   } catch (err) {
     process.stderr.write(`[runtime-cli] startTeam failed: ${err}\n`);
     process.exit(1);

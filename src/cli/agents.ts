@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { basename, join } from 'node:path';
 import TOML from '@iarna/toml';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 import { codexAgentsDir, projectCodexAgentsDir } from '../utils/paths.js';
 
 export const RESERVED_NATIVE_AGENT_NAMES = new Set(['default', 'worker', 'explorer']);
@@ -217,7 +218,7 @@ async function editNativeAgent(
   const result = spawnSync(editor, [path], {
     stdio: 'inherit',
     shell: true,
-    env: process.env,
+    env: buildChildEnv(process.cwd()),
   });
   if (result.status !== 0) {
     throw new Error(`editor exited with status ${result.status ?? 'unknown'}`);

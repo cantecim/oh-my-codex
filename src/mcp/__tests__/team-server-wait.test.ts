@@ -28,8 +28,10 @@ async function cleanupJobFiles(jobId: string): Promise<void> {
 }
 
 async function loadTeamServer() {
-  process.env.OMX_TEAM_SERVER_DISABLE_AUTO_START = "1";
-  return await import("../team-server.js");
+  return await withEnv(
+    { OMX_TEAM_SERVER_DISABLE_AUTO_START: "1" },
+    async () => await import("../team-server.js"),
+  );
 }
 
 async function withSyntheticHome<T>(run: () => Promise<T>): Promise<T> {

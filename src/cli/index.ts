@@ -94,6 +94,7 @@ import {
   type NotifyTempContract,
   type ParseNotifyTempContractResult,
 } from "../notifications/temp-contract.js";
+import { buildChildEnv } from "../test-support/shared-harness.js";
 
 export function resolveNotifyFallbackWatcherScript(pkgRoot = getPackageRoot()): string {
   return join(pkgRoot, "dist", "scripts", "notify-fallback-watcher.js");
@@ -981,15 +982,10 @@ export async function execWithOverlay(args: string[]): Promise<void> {
       process.env,
       sessionModelInstructionsPath(cwd, sessionId),
     );
-    const codexEnvBase = codexHomeOverride
-      ? { ...process.env, CODEX_HOME: codexHomeOverride }
-      : process.env;
-    const codexEnv = notifyTempContractRaw
-      ? {
-          ...codexEnvBase,
-          [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw,
-        }
-      : codexEnvBase;
+    const codexEnv = buildCodexLaunchEnv(cwd, process.env, {
+      CODEX_HOME: codexHomeOverride ?? process.env.CODEX_HOME,
+      [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw ?? undefined,
+    });
     runCodexBlocking(cwd, codexArgs, codexEnv);
   } finally {
     await postLaunch(cwd, sessionId, codexHomeOverride, true);
@@ -1580,6 +1576,44 @@ export function buildNotifyFallbackWatcherEnv(
   };
 }
 
+function buildHookDerivedWatcherEnv(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return buildChildEnv(cwd, {
+    OMX_HOOK_DERIVED_SIGNALS: "1",
+    CODEX_HOME: env.CODEX_HOME,
+    PATH: env.PATH ?? env.Path ?? "",
+  });
+}
+
+const CODEX_LAUNCH_OMX_ENV_KEYS = new Set<string>([
+  OMX_NOTIFY_TEMP_CONTRACT_ENV,
+  "OMX_SESSION_ID",
+  TEAM_WORKER_LAUNCH_ARGS_ENV,
+]);
+
+function buildCodexLaunchEnv(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Record<string, string | undefined> = {},
+): NodeJS.ProcessEnv {
+  const carried: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value !== "string") continue;
+    if (key.startsWith("OMX_") && !CODEX_LAUNCH_OMX_ENV_KEYS.has(key)) continue;
+    carried[key] = value;
+  }
+  return buildChildEnv(cwd, {
+    ...carried,
+    CODEX_HOME: env.CODEX_HOME,
+    PATH: env.PATH ?? env.Path ?? "",
+    TMUX: env.TMUX,
+    TMUX_PANE: env.TMUX_PANE,
+    ...overrides,
+  });
+}
+
 /**
  * preLaunch: Prepare environment before Codex starts.
  * 1. Generate runtime overlay + write session-scoped model instructions file
@@ -1709,16 +1743,12 @@ function runCodex(
     inheritLeaderFlags,
     workerDefaultModel,
   );
-  const codexBaseEnv = codexHomeOverride
-    ? { ...process.env, CODEX_HOME: codexHomeOverride }
-    : process.env;
-  const codexEnvWithSession = { ...codexBaseEnv, OMX_SESSION_ID: sessionId };
-  const codexEnv = workerLaunchArgs
-    ? { ...codexEnvWithSession, [TEAM_WORKER_LAUNCH_ARGS_ENV]: workerLaunchArgs }
-    : codexEnvWithSession;
-  const codexEnvWithNotify = notifyTempContractRaw
-    ? { ...codexEnv, [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw }
-    : codexEnv;
+  const codexEnvWithNotify = buildCodexLaunchEnv(cwd, process.env, {
+    CODEX_HOME: codexHomeOverride ?? process.env.CODEX_HOME,
+    OMX_SESSION_ID: sessionId,
+    [TEAM_WORKER_LAUNCH_ARGS_ENV]: workerLaunchArgs ?? undefined,
+    [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw ?? undefined,
+  });
 
   const launchPolicy = resolveCodexLaunchPolicy(
     process.env,
@@ -2483,7 +2513,7 @@ async function startHookDerivedWatcher(cwd: string): Promise<void> {
     cwd,
     detached: true,
     stdio: "ignore",
-    env: process.env,
+    env: buildHookDerivedWatcherEnv(cwd),
   });
   child.unref();
 
@@ -2603,10 +2633,7 @@ async function flushHookDerivedWatcherOnce(cwd: string): Promise<void> {
     cwd,
     stdio: "ignore",
     timeout: 3000,
-    env: {
-      ...process.env,
-      OMX_HOOK_DERIVED_SIGNALS: "1",
-    },
+    env: buildHookDerivedWatcherEnv(cwd),
   });
 }
 

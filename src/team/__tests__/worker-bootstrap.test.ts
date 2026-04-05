@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm, mkdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
+import { withEnv } from "../../test-support/shared-harness.js";
 import {
   generateWorkerOverlay,
   applyWorkerOverlay,
@@ -23,13 +24,11 @@ import {
 import { composeRoleInstructionsForRole } from "../../agents/native-config.js";
 import type { TeamTask } from "../state.js";
 
-function setMockCodexHome(codexHomePath: string): () => void {
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = codexHomePath;
-  return () => {
-    if (typeof previous === "string") process.env.CODEX_HOME = previous;
-    else delete process.env.CODEX_HOME;
-  };
+function withMockCodexHome<T>(
+  codexHomePath: string,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  return withEnv({ CODEX_HOME: codexHomePath }, run);
 }
 
 describe("worker bootstrap", () => {
@@ -542,89 +541,88 @@ describe("worker bootstrap", () => {
 
   it("writeTeamWorkerInstructionsFile composes user + project AGENTS.md with overlay", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-worker-bootstrap-"));
-    const restoreCodexHome = setMockCodexHome(join(cwd, "home", ".codex"));
     try {
-      await mkdir(join(cwd, "home", ".codex"), { recursive: true });
-      await writeFile(
-        join(cwd, "home", ".codex", "AGENTS.md"),
-        "# User Instructions\n\nStart globally.\n",
-        "utf8",
-      );
-      await writeFile(
-        join(cwd, "AGENTS.md"),
-        "# Project Instructions\n\nDo good work.\n",
-        "utf8",
-      );
+      await withMockCodexHome(join(cwd, "home", ".codex"), async () => {
+        await mkdir(join(cwd, "home", ".codex"), { recursive: true });
+        await writeFile(
+          join(cwd, "home", ".codex", "AGENTS.md"),
+          "# User Instructions\n\nStart globally.\n",
+          "utf8",
+        );
+        await writeFile(
+          join(cwd, "AGENTS.md"),
+          "# Project Instructions\n\nDo good work.\n",
+          "utf8",
+        );
 
-      const overlay = generateWorkerOverlay("compose-team");
-      const outPath = await writeTeamWorkerInstructionsFile(
-        "compose-team",
-        cwd,
-        overlay,
-      );
+        const overlay = generateWorkerOverlay("compose-team");
+        const outPath = await writeTeamWorkerInstructionsFile(
+          "compose-team",
+          cwd,
+          overlay,
+        );
 
-      const content = await readFile(outPath, "utf8");
-      assert.match(content, /# User Instructions/);
-      assert.match(content, /# Project Instructions/);
-      assert.ok(
-        content.indexOf("# User Instructions") <
-          content.indexOf("# Project Instructions"),
-      );
-      assert.match(content, /Do good work/);
-      assert.match(content, /<!-- OMX:TEAM:WORKER:START -->/);
-      assert.match(content, /<!-- OMX:TEAM:WORKER:END -->/);
+        const content = await readFile(outPath, "utf8");
+        assert.match(content, /# User Instructions/);
+        assert.match(content, /# Project Instructions/);
+        assert.ok(
+          content.indexOf("# User Instructions") <
+            content.indexOf("# Project Instructions"),
+        );
+        assert.match(content, /Do good work/);
+        assert.match(content, /<!-- OMX:TEAM:WORKER:START -->/);
+        assert.match(content, /<!-- OMX:TEAM:WORKER:END -->/);
 
-      // Verify project AGENTS.md was NOT modified
-      const projectContent = await readFile(join(cwd, "AGENTS.md"), "utf8");
-      assert.doesNotMatch(projectContent, /<!-- OMX:TEAM:WORKER:START -->/);
+        const projectContent = await readFile(join(cwd, "AGENTS.md"), "utf8");
+        assert.doesNotMatch(projectContent, /<!-- OMX:TEAM:WORKER:START -->/);
+      });
     } finally {
-      restoreCodexHome();
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
   it("writeTeamWorkerInstructionsFile deduplicates duplicate skill references in favor of project scope", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-worker-bootstrap-"));
-    const restoreCodexHome = setMockCodexHome(join(cwd, "home", ".codex"));
     try {
-      const userAgentsPath = join(cwd, "home", ".codex", "AGENTS.md");
-      const projectAgentsPath = join(cwd, "AGENTS.md");
-      const userSkillDir = join(cwd, "home", ".codex", "skills", "help");
-      const projectSkillDir = join(cwd, ".codex", "skills", "help");
+      await withMockCodexHome(join(cwd, "home", ".codex"), async () => {
+        const userAgentsPath = join(cwd, "home", ".codex", "AGENTS.md");
+        const projectAgentsPath = join(cwd, "AGENTS.md");
+        const userSkillDir = join(cwd, "home", ".codex", "skills", "help");
+        const projectSkillDir = join(cwd, ".codex", "skills", "help");
 
-      await mkdir(join(cwd, "home", ".codex"), { recursive: true });
-      await mkdir(userSkillDir, { recursive: true });
-      await mkdir(projectSkillDir, { recursive: true });
-      await writeFile(join(userSkillDir, "SKILL.md"), "# user help\n", "utf8");
-      await writeFile(
-        join(projectSkillDir, "SKILL.md"),
-        "# project help\n",
-        "utf8",
-      );
-      await writeFile(
-        userAgentsPath,
-        "- help user (file: /tmp/home/.codex/skills/help/SKILL.md)\n",
-        "utf8",
-      );
-      await writeFile(
-        projectAgentsPath,
-        "- help project (file: /tmp/project/.codex/skills/help/SKILL.md)\n",
-        "utf8",
-      );
+        await mkdir(join(cwd, "home", ".codex"), { recursive: true });
+        await mkdir(userSkillDir, { recursive: true });
+        await mkdir(projectSkillDir, { recursive: true });
+        await writeFile(join(userSkillDir, "SKILL.md"), "# user help\n", "utf8");
+        await writeFile(
+          join(projectSkillDir, "SKILL.md"),
+          "# project help\n",
+          "utf8",
+        );
+        await writeFile(
+          userAgentsPath,
+          "- help user (file: /tmp/home/.codex/skills/help/SKILL.md)\n",
+          "utf8",
+        );
+        await writeFile(
+          projectAgentsPath,
+          "- help project (file: /tmp/project/.codex/skills/help/SKILL.md)\n",
+          "utf8",
+        );
 
-      const overlay = generateWorkerOverlay("dedupe-team");
-      const outPath = await writeTeamWorkerInstructionsFile(
-        "dedupe-team",
-        cwd,
-        overlay,
-      );
-      const content = await readFile(outPath, "utf8");
+        const overlay = generateWorkerOverlay("dedupe-team");
+        const outPath = await writeTeamWorkerInstructionsFile(
+          "dedupe-team",
+          cwd,
+          overlay,
+        );
+        const content = await readFile(outPath, "utf8");
 
-      assert.equal((content.match(/skills\/help\/SKILL\.md/g) || []).length, 1);
-      assert.doesNotMatch(content, /help user/);
-      assert.match(content, /help project/);
+        assert.equal((content.match(/skills\/help\/SKILL\.md/g) || []).length, 1);
+        assert.doesNotMatch(content, /help user/);
+        assert.match(content, /help project/);
+      });
     } finally {
-      restoreCodexHome();
       await rm(cwd, { recursive: true, force: true });
     }
   });

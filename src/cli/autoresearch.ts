@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
+import { buildChildEnv, withEnv } from '../test-support/shared-harness.js';
 import { toLegacyDisplayPath } from '../utils/display-path.js';
 import { ensureWorktree, planWorktreeTarget } from '../team/worktree.js';
 import { loadAutoresearchMissionContract } from '../autoresearch/contracts.js';
@@ -87,22 +88,14 @@ async function runGuidedAutoresearchDeepInterview(
   repoRoot: string,
   seedArgs?: ReturnType<typeof parseInitArgs>,
 ): Promise<Awaited<ReturnType<typeof initAutoresearchMission>>> {
-  const previousInstructionsFile = process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV];
   const appendixPath = await writeAutoresearchDeepInterviewAppendixFile(repoRoot);
   const existingResultPaths = new Set(await listAutoresearchDeepInterviewResultPaths(repoRoot));
   const existingDraftPaths = new Set(await listAutoresearchDeepInterviewDraftPaths(repoRoot));
-  process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV] = appendixPath;
 
-  try {
+  await withEnv({ [AUTORESEARCH_APPEND_INSTRUCTIONS_ENV]: appendixPath }, async () => {
     const { launchWithHud } = await import('./index.js');
     await launchWithHud([buildAutoresearchDeepInterviewPrompt(seedArgs ?? {})]);
-  } finally {
-    if (typeof previousInstructionsFile === 'string') {
-      process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV] = previousInstructionsFile;
-    } else {
-      delete process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV];
-    }
-  }
+  });
 
   const result = await resolveAutoresearchDeepInterviewResult(repoRoot, {
     excludeResultPaths: existingResultPaths,
@@ -156,7 +149,9 @@ function runAutoresearchTurn(worktreePath: string, instructionsFile: string, cod
     stdio: ['pipe', 'inherit', 'inherit'],
     input: prompt,
     encoding: 'utf-8',
-    env: process.env,
+    env: buildChildEnv(worktreePath, {
+      [AUTORESEARCH_APPEND_INSTRUCTIONS_ENV]: instructionsFile,
+    }),
       windowsHide: true,
     });
 
@@ -242,11 +237,7 @@ async function runAutoresearchLoop(
   },
   missionDir: string,
 ): Promise<void> {
-  const previousInstructionsFile = process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV];
-  const originalCwd = process.cwd();
-  process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV] = runtime.instructionsFile;
-
-  try {
+  await withEnv({ [AUTORESEARCH_APPEND_INSTRUCTIONS_ENV]: runtime.instructionsFile }, async () => {
     while (true) {
       runAutoresearchTurn(runtime.worktreePath, runtime.instructionsFile, codexArgs);
 
@@ -267,16 +258,8 @@ async function runAutoresearchLoop(
           return;
         }
       }
-      process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV] = runtime.instructionsFile;
     }
-  } finally {
-    process.chdir(originalCwd);
-    if (typeof previousInstructionsFile === 'string') {
-      process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV] = previousInstructionsFile;
-    } else {
-      delete process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV];
-    }
-  }
+  });
 }
 
 function checkTmuxAvailable(): boolean {

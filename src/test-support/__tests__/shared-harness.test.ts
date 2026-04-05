@@ -21,6 +21,7 @@ describe('shared harness isolation contract', () => {
       OMX_TEST_CAPTURE_FILE: '/tmp/capture.txt',
       OMX_TEST_CAPTURE_SEQUENCE_FILE: '/tmp/capture-seq.txt',
       OMX_TEST_CAPTURE_COUNTER_FILE: '/tmp/capture-seq.idx',
+      OMX_TEST_REPO_ROOT: '/tmp/repo-root',
       OMX_TEST_NOT_WHITELISTED: 'should-not-flow',
     });
 

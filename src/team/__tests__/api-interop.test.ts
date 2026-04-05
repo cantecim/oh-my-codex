@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { buildIsolatedEnv, withEnv } from '../../test-support/shared-harness.js';
 import {
   resolveTeamApiOperation,
   buildLegacyTeamDeprecationHint,
@@ -26,14 +27,12 @@ import {
 
 async function setupTeam(name: string): Promise<{ cwd: string; cleanup: () => Promise<void> }> {
   const cwd = await mkdtemp(join(tmpdir(), `omx-interop-${name}-`));
-  const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-  delete process.env.OMX_TEAM_STATE_ROOT;
-  await initTeamState(name, 'test task', 'executor', 2, cwd);
+  await initTeamState(name, 'test task', 'executor', 2, cwd, undefined, buildIsolatedEnv({
+    OMX_TEAM_STATE_ROOT: undefined,
+  }));
   return {
     cwd,
     cleanup: async () => {
-      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
-      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwd, { recursive: true, force: true });
     },
   };
@@ -486,11 +485,6 @@ describe('executeTeamApiOperation: list-tasks', () => {
     const teamName = 'list-tsk-meta';
     const cwdA = await mkdtemp(join(tmpdir(), 'omx-interop-meta-a-'));
     const cwdB = await mkdtemp(join(tmpdir(), 'omx-interop-meta-b-'));
-    const prevTeamWorker = process.env.OMX_TEAM_WORKER;
-    const prevTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-    delete process.env.OMX_TEAM_STATE_ROOT;
-    process.env.OMX_TEAM_WORKER = `${teamName}/worker-1`;
-
     try {
       await initTeamState(teamName, 'metadata precedence', 'executor', 2, cwdA);
       await initTeamState(teamName, 'metadata precedence', 'executor', 2, cwdB);
@@ -509,15 +503,14 @@ describe('executeTeamApiOperation: list-tasks', () => {
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
       await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
-      const result = await executeTeamApiOperation('list-tasks', { team_name: teamName }, cwdA);
+      const result = await withEnv({
+        OMX_TEAM_STATE_ROOT: undefined,
+        OMX_TEAM_WORKER: `${teamName}/worker-1`,
+      }, async () => executeTeamApiOperation('list-tasks', { team_name: teamName }, cwdA));
       assert.equal(result.ok, true);
       if (!result.ok) throw new Error('expected list-tasks to succeed');
       assert.equal(result.data.count, 1);
     } finally {
-      if (typeof prevTeamWorker === 'string') process.env.OMX_TEAM_WORKER = prevTeamWorker;
-      else delete process.env.OMX_TEAM_WORKER;
-      if (typeof prevTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = prevTeamStateRoot;
-      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwdA, { recursive: true, force: true });
       await rm(cwdB, { recursive: true, force: true });
     }

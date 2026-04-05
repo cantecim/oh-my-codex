@@ -34,11 +34,11 @@ function snapshotTmuxEnv(source: NodeJS.ProcessEnv = process.env): TmuxEnvSnapsh
 }
 
 function applyTmuxEnv(snapshot: TmuxEnvSnapshot): void {
-  if (typeof snapshot.TMUX === 'string') process.env.TMUX = snapshot.TMUX;
-  else delete process.env.TMUX;
-
-  if (typeof snapshot.TMUX_PANE === 'string') process.env.TMUX_PANE = snapshot.TMUX_PANE;
-  else delete process.env.TMUX_PANE;
+  for (const key of ['TMUX', 'TMUX_PANE'] as const) {
+    const value = snapshot[key];
+    if (typeof value === 'string') process.env[key] = value;
+    else delete process.env[key];
+  }
 }
 
 function scrubTmuxEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

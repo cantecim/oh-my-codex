@@ -4,6 +4,7 @@ import { chmod, mkdtemp, rm, writeFile, readFile, mkdir, utimes } from 'fs/promi
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { existsSync, readFileSync } from 'fs';
+import { buildIsolatedEnv, withEnv } from '../../test-support/shared-harness.js';
 import {
   ABSOLUTE_MAX_WORKERS,
   DEFAULT_MAX_WORKERS,
@@ -365,7 +366,6 @@ describe('team state', () => {
 
   it('dispatch bridge queue uses the same request id as the TS store', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-dispatch-bridge-sync-'));
-    const previousRuntimeBinary = process.env.OMX_RUNTIME_BINARY;
     try {
       await initTeamState('team-dispatch-sync', 't', 'executor', 1, cwd);
       const fakeBinDir = join(cwd, 'fake-bin');
@@ -388,29 +388,27 @@ exit 1
 `,
       );
       await chmod(join(fakeBinDir, 'omx-runtime'), 0o755);
-      process.env.OMX_RUNTIME_BINARY = join(fakeBinDir, 'omx-runtime');
+      await withEnv({ OMX_RUNTIME_BINARY: join(fakeBinDir, 'omx-runtime') }, async () => {
+        const queued = await enqueueDispatchRequest(
+          'team-dispatch-sync',
+          {
+            kind: 'inbox',
+            to_worker: 'worker-1',
+            trigger_message: 'ping',
+          },
+          cwd,
+        );
 
-      const queued = await enqueueDispatchRequest(
-        'team-dispatch-sync',
-        {
-          kind: 'inbox',
-          to_worker: 'worker-1',
-          trigger_message: 'ping',
-        },
-        cwd,
-      );
-
-      const runtimeLog = await readFile(runtimeLogPath, 'utf8');
-      const queueLine = runtimeLog.split('\n').find((line) => line.startsWith('exec {"command":"QueueDispatch"'));
-      assert.ok(queueLine, 'expected QueueDispatch bridge call');
-      const jsonStart = queueLine.indexOf('{');
-      const stateDirFlag = queueLine.lastIndexOf(' --state-dir=');
-      const jsonPayload = stateDirFlag > jsonStart ? queueLine.slice(jsonStart, stateDirFlag) : queueLine.slice(jsonStart);
-      const payload = JSON.parse(jsonPayload) as { request_id: string };
-      assert.equal(payload.request_id, queued.request.request_id);
+        const runtimeLog = await readFile(runtimeLogPath, 'utf8');
+        const queueLine = runtimeLog.split('\n').find((line) => line.startsWith('exec {"command":"QueueDispatch"'));
+        assert.ok(queueLine, 'expected QueueDispatch bridge call');
+        const jsonStart = queueLine.indexOf('{');
+        const stateDirFlag = queueLine.lastIndexOf(' --state-dir=');
+        const jsonPayload = stateDirFlag > jsonStart ? queueLine.slice(jsonStart, stateDirFlag) : queueLine.slice(jsonStart);
+        const payload = JSON.parse(jsonPayload) as { request_id: string };
+        assert.equal(payload.request_id, queued.request.request_id);
+      });
     } finally {
-      if (typeof previousRuntimeBinary === 'string') process.env.OMX_RUNTIME_BINARY = previousRuntimeBinary;
-      else delete process.env.OMX_RUNTIME_BINARY;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -460,45 +458,42 @@ exit 1
 
   it('prefers bridge-authored dispatch records without mutating the legacy requests file', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-dispatch-bridge-authority-'));
-    const previousRuntimeBinary = process.env.OMX_RUNTIME_BINARY;
     try {
       await initTeamState('team-dispatch-bridge-authority', 't', 'executor', 1, cwd);
       const fakeBinDir = join(cwd, 'fake-bin');
       const runtimeLogPath = join(cwd, 'runtime.log');
       await mkdir(fakeBinDir, { recursive: true });
       await writeCompatRuntimeFixture(join(fakeBinDir, 'omx-runtime'), runtimeLogPath);
-      process.env.OMX_RUNTIME_BINARY = join(fakeBinDir, 'omx-runtime');
+      await withEnv({ OMX_RUNTIME_BINARY: join(fakeBinDir, 'omx-runtime') }, async () => {
+        const legacyPath = join(cwd, '.omx', 'state', 'team', 'team-dispatch-bridge-authority', 'dispatch', 'requests.json');
+        const before = await readFile(legacyPath, 'utf8');
+        assert.equal(JSON.parse(before).length, 0);
 
-      const legacyPath = join(cwd, '.omx', 'state', 'team', 'team-dispatch-bridge-authority', 'dispatch', 'requests.json');
-      const before = await readFile(legacyPath, 'utf8');
-      assert.equal(JSON.parse(before).length, 0);
+        const queued = await enqueueDispatchRequest(
+          'team-dispatch-bridge-authority',
+          {
+            kind: 'mailbox',
+            to_worker: 'worker-1',
+            message_id: 'bridge-msg-1',
+            trigger_message: 'check mailbox',
+          },
+          cwd,
+        );
 
-      const queued = await enqueueDispatchRequest(
-        'team-dispatch-bridge-authority',
-        {
-          kind: 'mailbox',
-          to_worker: 'worker-1',
-          message_id: 'bridge-msg-1',
-          trigger_message: 'check mailbox',
-        },
-        cwd,
-      );
+        const requests = await listDispatchRequests('team-dispatch-bridge-authority', cwd);
+        assert.equal(requests.length, 1);
+        assert.equal(requests[0]?.request_id, queued.request.request_id);
+        assert.equal(requests[0]?.message_id, 'bridge-msg-1');
 
-      const requests = await listDispatchRequests('team-dispatch-bridge-authority', cwd);
-      assert.equal(requests.length, 1);
-      assert.equal(requests[0]?.request_id, queued.request.request_id);
-      assert.equal(requests[0]?.message_id, 'bridge-msg-1');
+        await markDispatchRequestNotified('team-dispatch-bridge-authority', queued.request.request_id, {}, cwd);
+        await markDispatchRequestDelivered('team-dispatch-bridge-authority', queued.request.request_id, {}, cwd);
+        const delivered = await readDispatchRequest('team-dispatch-bridge-authority', queued.request.request_id, cwd);
+        assert.equal(delivered?.status, 'delivered');
 
-      await markDispatchRequestNotified('team-dispatch-bridge-authority', queued.request.request_id, {}, cwd);
-      await markDispatchRequestDelivered('team-dispatch-bridge-authority', queued.request.request_id, {}, cwd);
-      const delivered = await readDispatchRequest('team-dispatch-bridge-authority', queued.request.request_id, cwd);
-      assert.equal(delivered?.status, 'delivered');
-
-      const after = await readFile(legacyPath, 'utf8');
-      assert.deepEqual(JSON.parse(after), [], 'bridge-success path should not rewrite legacy dispatch requests.json');
+        const after = await readFile(legacyPath, 'utf8');
+        assert.deepEqual(JSON.parse(after), [], 'bridge-success path should not rewrite legacy dispatch requests.json');
+      });
     } finally {
-      if (typeof previousRuntimeBinary === 'string') process.env.OMX_RUNTIME_BINARY = previousRuntimeBinary;
-      else delete process.env.OMX_RUNTIME_BINARY;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -597,47 +592,44 @@ exit 1
     const leaderCwd = join(root, 'leader');
     const workerCwd = join(root, 'worker-worktree');
     const explicitStateRoot = join(leaderCwd, '.omx', 'state');
-    const prevRoot = process.env.OMX_TEAM_STATE_ROOT;
     try {
       await mkdir(leaderCwd, { recursive: true });
       await mkdir(workerCwd, { recursive: true });
       await initTeamState('team-explicit-root', 't', 'executor', 1, leaderCwd);
-      process.env.OMX_TEAM_STATE_ROOT = explicitStateRoot;
+      await withEnv({ OMX_TEAM_STATE_ROOT: explicitStateRoot }, async () => {
+        const task = await createTask(
+          'team-explicit-root',
+          { subject: 'explicit root task', description: 'regression guard', status: 'pending' },
+          workerCwd,
+        );
+        const claim = await claimTask('team-explicit-root', task.id, 'worker-1', task.version ?? 1, workerCwd);
+        assert.equal(claim.ok, true);
 
-      const task = await createTask(
-        'team-explicit-root',
-        { subject: 'explicit root task', description: 'regression guard', status: 'pending' },
-        workerCwd,
-      );
-      const claim = await claimTask('team-explicit-root', task.id, 'worker-1', task.version ?? 1, workerCwd);
-      assert.equal(claim.ok, true);
+        await sendDirectMessage('team-explicit-root', 'worker-1', 'leader-fixed', 'hello from worker cwd', workerCwd);
+        const messages = await listMailboxMessages('team-explicit-root', 'leader-fixed', workerCwd);
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0]?.body, 'hello from worker cwd');
 
-      await sendDirectMessage('team-explicit-root', 'worker-1', 'leader-fixed', 'hello from worker cwd', workerCwd);
-      const messages = await listMailboxMessages('team-explicit-root', 'leader-fixed', workerCwd);
-      assert.equal(messages.length, 1);
-      assert.equal(messages[0]?.body, 'hello from worker cwd');
+        const approvalRecord = {
+          task_id: task.id,
+          required: true,
+          status: 'approved' as const,
+          reviewer: 'leader-fixed',
+          decision_reason: 'path guard uses resolved team state root',
+          decided_at: new Date().toISOString(),
+        };
+        await writeTaskApproval('team-explicit-root', approvalRecord, workerCwd);
+        const approval = await readTaskApproval('team-explicit-root', task.id, workerCwd);
+        assert.equal(approval?.status, 'approved');
+        assert.equal(approval?.reviewer, 'leader-fixed');
 
-      const approvalRecord = {
-        task_id: task.id,
-        required: true,
-        status: 'approved' as const,
-        reviewer: 'leader-fixed',
-        decision_reason: 'path guard uses resolved team state root',
-        decided_at: new Date().toISOString(),
-      };
-      await writeTaskApproval('team-explicit-root', approvalRecord, workerCwd);
-      const approval = await readTaskApproval('team-explicit-root', task.id, workerCwd);
-      assert.equal(approval?.status, 'approved');
-      assert.equal(approval?.reviewer, 'leader-fixed');
-
-      const explicitTeamRoot = join(explicitStateRoot, 'team', 'team-explicit-root');
-      assert.equal(existsSync(join(explicitTeamRoot, 'tasks', `task-${task.id}.json`)), true);
-      assert.equal(existsSync(join(explicitTeamRoot, 'mailbox', 'leader-fixed.json')), true);
-      assert.equal(existsSync(join(explicitTeamRoot, 'approvals', `task-${task.id}.json`)), true);
-      assert.equal(existsSync(join(workerCwd, '.omx', 'state', 'team', 'team-explicit-root')), false);
+        const explicitTeamRoot = join(explicitStateRoot, 'team', 'team-explicit-root');
+        assert.equal(existsSync(join(explicitTeamRoot, 'tasks', `task-${task.id}.json`)), true);
+        assert.equal(existsSync(join(explicitTeamRoot, 'mailbox', 'leader-fixed.json')), true);
+        assert.equal(existsSync(join(explicitTeamRoot, 'approvals', `task-${task.id}.json`)), true);
+        assert.equal(existsSync(join(workerCwd, '.omx', 'state', 'team', 'team-explicit-root')), false);
+      });
     } finally {
-      if (typeof prevRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = prevRoot;
-      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -1213,36 +1205,33 @@ exit 1
 
   it('prefers bridge-authored mailbox records without mutating the legacy mailbox file', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-mailbox-bridge-authority-'));
-    const previousRuntimeBinary = process.env.OMX_RUNTIME_BINARY;
     try {
       await initTeamState('team-mailbox-bridge-authority', 't', 'executor', 2, cwd);
       const fakeBinDir = join(cwd, 'fake-bin');
       const runtimeLogPath = join(cwd, 'runtime.log');
       await mkdir(fakeBinDir, { recursive: true });
       await writeCompatRuntimeFixture(join(fakeBinDir, 'omx-runtime'), runtimeLogPath);
-      process.env.OMX_RUNTIME_BINARY = join(fakeBinDir, 'omx-runtime');
+      await withEnv({ OMX_RUNTIME_BINARY: join(fakeBinDir, 'omx-runtime') }, async () => {
+        const legacyPath = join(cwd, '.omx', 'state', 'team', 'team-mailbox-bridge-authority', 'mailbox', 'worker-2.json');
+        assert.equal(existsSync(legacyPath), false);
 
-      const legacyPath = join(cwd, '.omx', 'state', 'team', 'team-mailbox-bridge-authority', 'mailbox', 'worker-2.json');
-      assert.equal(existsSync(legacyPath), false);
+        const message = await sendDirectMessage('team-mailbox-bridge-authority', 'worker-1', 'worker-2', 'hello', cwd);
+        assert.equal(message.to_worker, 'worker-2');
+        await markMessageNotified('team-mailbox-bridge-authority', 'worker-2', message.message_id, cwd);
+        await markMessageDelivered('team-mailbox-bridge-authority', 'worker-2', message.message_id, cwd);
 
-      const message = await sendDirectMessage('team-mailbox-bridge-authority', 'worker-1', 'worker-2', 'hello', cwd);
-      assert.equal(message.to_worker, 'worker-2');
-      await markMessageNotified('team-mailbox-bridge-authority', 'worker-2', message.message_id, cwd);
-      await markMessageDelivered('team-mailbox-bridge-authority', 'worker-2', message.message_id, cwd);
+        const messages = await listMailboxMessages('team-mailbox-bridge-authority', 'worker-2', cwd);
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0]?.message_id, message.message_id);
+        assert.equal(typeof messages[0]?.notified_at, 'string');
+        assert.equal(typeof messages[0]?.delivered_at, 'string');
 
-      const messages = await listMailboxMessages('team-mailbox-bridge-authority', 'worker-2', cwd);
-      assert.equal(messages.length, 1);
-      assert.equal(messages[0]?.message_id, message.message_id);
-      assert.equal(typeof messages[0]?.notified_at, 'string');
-      assert.equal(typeof messages[0]?.delivered_at, 'string');
-
-      if (existsSync(legacyPath)) {
-        const after = JSON.parse(await readFile(legacyPath, 'utf8')) as { messages: unknown[] };
-        assert.equal(after.messages.length, 0, 'bridge-success path should not rewrite legacy mailbox JSON');
-      }
+        if (existsSync(legacyPath)) {
+          const after = JSON.parse(await readFile(legacyPath, 'utf8')) as { messages: unknown[] };
+          assert.equal(after.messages.length, 0, 'bridge-success path should not rewrite legacy mailbox JSON');
+        }
+      });
     } finally {
-      if (typeof previousRuntimeBinary === 'string') process.env.OMX_RUNTIME_BINARY = previousRuntimeBinary;
-      else delete process.env.OMX_RUNTIME_BINARY;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -1866,15 +1855,14 @@ exit 1
         1,
         cwd,
         DEFAULT_MAX_WORKERS,
-        {
-          ...process.env,
+        buildIsolatedEnv({
           OMX_TEAM_DISPLAY_MODE: 'tmux',
           OMX_TEAM_WORKER_LAUNCH_MODE: 'prompt',
           CODEX_APPROVAL_MODE: 'on-request',
           CODEX_SANDBOX_MODE: 'workspace-write',
           CODEX_NETWORK_ACCESS: '0',
           OMX_SESSION_ID: 'session-xyz',
-        },
+        }),
       );
 
       const manifest = await readTeamManifestV2('team-env', cwd);
@@ -1905,10 +1893,9 @@ exit 1
           1,
           cwd,
           DEFAULT_MAX_WORKERS,
-          {
-            ...process.env,
+          buildIsolatedEnv({
             OMX_TEAM_WORKER_LAUNCH_MODE: 'tmux',
-          },
+          }),
         ),
         /Invalid OMX_TEAM_WORKER_LAUNCH_MODE value/i,
       );

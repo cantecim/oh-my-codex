@@ -254,6 +254,38 @@ interface WorkerShutdownMergeReport {
   mergeDetail: string;
 }
 
+function buildPromptWorkerSpawnEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  const inherited = process.env;
+  const env: Record<string, string | undefined> = {
+    HOME: inherited.HOME,
+    CODEX_HOME: inherited.CODEX_HOME,
+    TMPDIR: inherited.TMPDIR,
+    TMP: inherited.TMP,
+    TEMP: inherited.TEMP,
+    TZ: inherited.TZ,
+    LANG: inherited.LANG,
+    LC_ALL: inherited.LC_ALL,
+    TERM: inherited.TERM,
+    SystemRoot: inherited.SystemRoot,
+    ComSpec: inherited.ComSpec,
+    PATHEXT: inherited.PATHEXT,
+    windir: inherited.windir,
+    OMX_TEST_DEBUG: inherited.OMX_TEST_DEBUG,
+    OMX_TEST_ARTIFACTS_DIR: inherited.OMX_TEST_ARTIFACTS_DIR,
+    OMX_TEST_DEBUG_TEST_ID: inherited.OMX_TEST_DEBUG_TEST_ID,
+    OMX_TEST_TRACE_ID: inherited.OMX_TEST_TRACE_ID,
+    OMX_TEST_CAPTURE_FILE: inherited.OMX_TEST_CAPTURE_FILE,
+    OMX_TEST_CAPTURE_SEQUENCE_FILE: inherited.OMX_TEST_CAPTURE_SEQUENCE_FILE,
+    OMX_TEST_CAPTURE_COUNTER_FILE: inherited.OMX_TEST_CAPTURE_COUNTER_FILE,
+    OMX_ARGV_CAPTURE_DIR: inherited.OMX_ARGV_CAPTURE_DIR,
+    OMX_CODEX_ARGV_CAPTURE_PATH: inherited.OMX_CODEX_ARGV_CAPTURE_PATH,
+    OMX_GEMINI_ARGV_CAPTURE_PATH: inherited.OMX_GEMINI_ARGV_CAPTURE_PATH,
+    OMX_TEST_LOG_DIR: inherited.OMX_TEST_LOG_DIR,
+    ...overrides,
+  };
+  return Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
+}
+
 function runCommand(command: string, args: string[], cwd: string): CommandResult {
   const result = spawnSync(command, args, {
     cwd,
@@ -864,14 +896,14 @@ function parseTeamWorkerContext(raw: string | undefined): { teamName: string; wo
   return { teamName, workerName };
 }
 
-function resolveManifestLookupCwds(cwd: string): string[] {
+function resolveManifestLookupCwds(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
   const candidates = new Set<string>([resolve(cwd)]);
-  const leaderCwd = process.env[TEAM_LEADER_CWD_ENV];
+  const leaderCwd = env[TEAM_LEADER_CWD_ENV];
   if (typeof leaderCwd === 'string' && leaderCwd.trim() !== '') {
     candidates.add(resolve(leaderCwd));
   }
 
-  const teamStateRoot = process.env[TEAM_STATE_ROOT_ENV];
+  const teamStateRoot = env[TEAM_STATE_ROOT_ENV];
   if (typeof teamStateRoot === 'string' && teamStateRoot.trim() !== '') {
     candidates.add(resolve(teamStateRoot, '..', '..'));
   }
@@ -886,11 +918,11 @@ function resolveGovernancePolicy(
   return normalizeTeamGovernance(governance, legacyPolicy);
 }
 
-async function assertNestedTeamAllowed(cwd: string): Promise<void> {
-  const workerContext = parseTeamWorkerContext(process.env.OMX_TEAM_WORKER);
+async function assertNestedTeamAllowed(cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const workerContext = parseTeamWorkerContext(env.OMX_TEAM_WORKER);
   if (!workerContext) return;
 
-  for (const candidateCwd of resolveManifestLookupCwds(cwd)) {
+  for (const candidateCwd of resolveManifestLookupCwds(cwd, env)) {
     const manifest = await readTeamManifestV2(workerContext.teamName, candidateCwd);
     const governance = resolveGovernancePolicy(manifest?.governance);
     if (governance.nested_teams_allowed) return;
@@ -1169,7 +1201,7 @@ function spawnPromptWorker(
     processSpec.args,
     {
       cwd: workerCwd,
-      env: { ...process.env, ...processSpec.env },
+      env: buildPromptWorkerSpawnEnv(processSpec.env),
       stdio: ['pipe', 'ignore', 'ignore'],
     },
   );
@@ -1264,7 +1296,7 @@ export async function startTeam(
 ): Promise<TeamRuntime> {
   const leaderCwd = resolve(cwd);
   const leaderEnvSnapshot: NodeJS.ProcessEnv = { ...(options.leaderEnvSnapshot ?? process.env) };
-  await assertNestedTeamAllowed(leaderCwd);
+  await assertNestedTeamAllowed(leaderCwd, leaderEnvSnapshot);
   const effectiveWorktreeMode = resolveEffectiveTeamWorktreeMode(leaderCwd, options.worktreeMode);
 
   const workerLaunchMode = resolveTeamWorkerLaunchMode(leaderEnvSnapshot);
@@ -1273,7 +1305,7 @@ export async function startTeam(
     if (!isTmuxAvailable()) {
       throw new Error('Team mode requires tmux. Install with: apt install tmux / brew install tmux');
     }
-    if (!process.env.TMUX) {
+    if (!leaderEnvSnapshot.TMUX) {
       throw new Error('Team mode requires running inside tmux current leader pane');
     }
   }
@@ -1324,7 +1356,7 @@ export async function startTeam(
     }
   }
 
-  const leaderSessionId = await resolveLeaderSessionId(leaderCwd);
+  const leaderSessionId = await resolveLeaderSessionId(leaderCwd, leaderEnvSnapshot);
 
   // Topology guard: one active team per leader session/process context.
   const activeTeams = await findActiveTeams(leaderCwd, leaderSessionId);
@@ -1493,6 +1525,18 @@ export async function startTeam(
         [TEAM_LEADER_CWD_ENV]: leaderCwd,
         [MODEL_INSTRUCTIONS_FILE_ENV]: plan.instructionsFilePath,
       };
+      const inheritedWorkerTestEnv = [
+        'OMX_ARGV_CAPTURE_DIR',
+        'OMX_CODEX_ARGV_CAPTURE_PATH',
+        'OMX_GEMINI_ARGV_CAPTURE_PATH',
+        'OMX_TEST_LOG_DIR',
+      ] as const;
+      for (const key of inheritedWorkerTestEnv) {
+        const value = leaderEnvSnapshot[key];
+        if (typeof value === 'string' && value.trim() !== '') {
+          env[key] = value;
+        }
+      }
       if (plan.workerWorkspace.worktreePath) {
         env.OMX_TEAM_WORKTREE_PATH = plan.workerWorkspace.worktreePath;
       }
@@ -1515,7 +1559,7 @@ export async function startTeam(
 
     // 6. Create worker runtime (interactive tmux panes or prompt-mode child processes)
     if (workerLaunchMode === 'interactive') {
-      const createdSession = createTeamSession(sanitized, workerCount, leaderCwd, sharedWorkerLaunchArgs, workerStartups);
+      const createdSession = createTeamSession(sanitized, workerCount, leaderCwd, sharedWorkerLaunchArgs, workerStartups, leaderEnvSnapshot);
       sessionName = createdSession.name;
       sessionCreated = true;
       createdWorkerPaneIds.push(...createdSession.workerPaneIds);
@@ -2510,8 +2554,8 @@ async function findActiveTeams(cwd: string, leaderSessionId: string): Promise<st
   return active;
 }
 
-async function resolveLeaderSessionId(cwd: string): Promise<string> {
-  const fromEnv = process.env.OMX_SESSION_ID || process.env.CODEX_SESSION_ID || process.env.SESSION_ID;
+async function resolveLeaderSessionId(cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const fromEnv = env.OMX_SESSION_ID || env.CODEX_SESSION_ID || env.SESSION_ID;
   if (fromEnv && fromEnv.trim() !== '') return fromEnv.trim();
 
   const p = join(cwd, '.omx', 'state', 'session.json');

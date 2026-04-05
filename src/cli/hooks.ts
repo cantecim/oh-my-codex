@@ -6,6 +6,7 @@ import { buildHookEvent } from '../hooks/extensibility/events.js';
 import { dispatchHookEvent } from '../hooks/extensibility/dispatcher.js';
 import { discoverHookPlugins, isHookPluginsEnabled } from '../hooks/extensibility/loader.js';
 import type { HookPluginDescriptor } from '../hooks/extensibility/types.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 
 const HELP = `
 Usage:
@@ -196,10 +197,9 @@ async function testHooks(): Promise<void> {
   const rawResult = await dispatchHookEvent(event, {
     cwd,
     event,
-    env: {
-      ...process.env,
+    env: buildChildEnv(cwd, {
       OMX_HOOK_PLUGINS: '1',
-    },
+    }),
     allowInTeamWorker: false,
   } as never);
   const result = normalizeDispatchResult(rawResult);

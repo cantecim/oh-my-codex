@@ -22,6 +22,7 @@ import {
   resolvePackagedExploreHarnessCommand,
 } from '../explore.js';
 import { withPackagedExploreHarnessHidden, withPackagedExploreHarnessLock } from './packaged-explore-harness-lock.js';
+import { buildChildEnv, withEnv, withWorkingDir } from '../../test-support/shared-harness.js';
 
 function runOmx(
   cwd: string,
@@ -39,7 +40,7 @@ function runOmx(
   const r = spawnSync(nodeWrapper, [omxBin, ...argv], {
     cwd,
     encoding: 'utf-8',
-    env: { ...process.env, ...envOverrides },
+    env: buildChildEnv(cwd, envOverrides),
   });
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', error: r.error?.message };
 }
@@ -58,11 +59,6 @@ async function runExploreCommandForTest(
   const originalStdout = process.stdout.write.bind(process.stdout);
   const originalStderr = process.stderr.write.bind(process.stderr);
   const originalExitCode = process.exitCode;
-  const previousEnv = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(envOverrides)) {
-    previousEnv.set(key, process.env[key]);
-    process.env[key] = value;
-  }
 
   process.stdout.write = ((chunk: string | Uint8Array) => {
     stdoutChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8'));
@@ -73,17 +69,14 @@ async function runExploreCommandForTest(
     return true;
   }) as typeof process.stderr.write;
 
-  const originalCwd = process.cwd();
   process.exitCode = 0;
   try {
-    process.chdir(cwd);
-    await exploreCommand(argv);
+    await withEnv(envOverrides, async () => {
+      await withWorkingDir(cwd, async () => {
+        await exploreCommand(argv);
+      });
+    });
   } finally {
-    process.chdir(originalCwd);
-    for (const [key, value] of previousEnv.entries()) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
     process.stdout.write = originalStdout;
     process.stderr.write = originalStderr;
   }
@@ -104,7 +97,7 @@ async function createExploreTestPath(wd: string): Promise<string> {
   if (process.platform !== 'win32') {
     await chmod(rgPath, 0o755);
   }
-  return `${binDir}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH || ''}`;
+  return `${binDir}${process.platform === 'win32' ? ';' : ':'}${buildChildEnv(wd).PATH || ''}`;
 }
 
 async function writeEnvNodeCodexStub(wd: string, capturePath: string): Promise<string> {
@@ -715,16 +708,13 @@ describe('exploreCommand', () => {
         return true;
       }) as typeof process.stderr.write;
 
-      const originalEnv = process.env.OMX_EXPLORE_BIN;
-      process.env.OMX_EXPLORE_BIN = stub;
-      const originalCwd = process.cwd();
-      process.chdir(wd);
       try {
-        await exploreCommand(['--prompt', 'find', 'auth']);
+        await withEnv({ OMX_EXPLORE_BIN: stub }, async () => {
+          await withWorkingDir(wd, async () => {
+            await exploreCommand(['--prompt', 'find', 'auth']);
+          });
+        });
       } finally {
-        process.chdir(originalCwd);
-        if (originalEnv === undefined) delete process.env.OMX_EXPLORE_BIN;
-        else process.env.OMX_EXPLORE_BIN = originalEnv;
         process.stdout.write = originalStdout;
         process.stderr.write = originalStderr;
       }

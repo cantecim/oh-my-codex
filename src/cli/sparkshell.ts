@@ -8,6 +8,7 @@ import { arch as osArch, constants as osConstants } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import { getPackageRoot } from '../utils/package.js';
 import { classifySpawnError } from '../utils/platform-command.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 import { readConfiguredEnvOverrides } from '../config/models.js';
 import { buildCapturePaneArgv } from '../scripts/tmux-hook-engine.js';
 import {
@@ -289,7 +290,7 @@ function runSparkShellFallback(args: readonly string[], options: RunSparkShellFa
   }
   const result = spawnSync(invocation.argv[0], invocation.argv.slice(1), {
     cwd: process.cwd(),
-    env: process.env,
+    env: buildChildEnv(process.cwd()),
     stdio: 'inherit',
     encoding: 'utf-8',
   });

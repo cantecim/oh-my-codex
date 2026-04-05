@@ -21,6 +21,7 @@ import { teamReadConfig as readTeamConfig } from '../team/team-ops.js';
 import { NudgeTracker } from '../team/idle-nudge.js';
 import { getLatestTeamEventCursor, waitForTeamEvent } from '../team/state/events.js';
 import { autoStartStdioMcpServer } from './bootstrap.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -73,6 +74,13 @@ const omxTeamJobs = new Map<string, OmxTeamJob>();
 
 function getOmxJobsDir(): string {
   return join(homedir(), '.omx', 'team-jobs');
+}
+
+function buildTeamRuntimeChildEnv(cwd: string, jobId: string): NodeJS.ProcessEnv {
+  return buildChildEnv(cwd, {
+    OMX_JOB_ID: jobId,
+    OMX_JOBS_DIR: getOmxJobsDir(),
+  });
 }
 
 function persistJob(jobId: string, job: OmxTeamJob): void {
@@ -330,7 +338,7 @@ export async function handleTeamToolCall(request: {
         omxTeamJobs.set(jobId, job);
 
         const child = spawn('node', [runtimeCliPath], {
-          env: { ...process.env, OMX_JOB_ID: jobId, OMX_JOBS_DIR: getOmxJobsDir() },
+          env: buildTeamRuntimeChildEnv(inputCwd, jobId),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         job.pid = child.pid;

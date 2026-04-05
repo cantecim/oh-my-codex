@@ -4,6 +4,7 @@ import { readFile, readdir } from 'fs/promises';
 import { isAbsolute, join } from 'path';
 import { constants as osConstants } from 'os';
 import { getPackageRoot } from '../utils/package.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 import { codexPromptsDir } from '../utils/paths.js';
 
 export const ASK_USAGE = [
@@ -22,6 +23,22 @@ const ASK_ADVISOR_SCRIPT_ENV = 'OMX_ASK_ADVISOR_SCRIPT';
 const ASK_AGENT_PROMPT_FLAG = '--agent-prompt';
 const ASK_ORIGINAL_TASK_ENV = 'OMX_ASK_ORIGINAL_TASK';
 const SAFE_ROLE_PATTERN = /^[a-z][a-z0-9-]*$/;
+const ASK_EXPLICIT_ENV_KEYS = [
+  ASK_ADVISOR_SCRIPT_ENV,
+  'OMX_ASK_STUB_STDOUT',
+  'OMX_ASK_STUB_STDERR',
+  'OMX_ASK_STUB_EXIT_CODE',
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'OPENAI_API_KEY',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+] as const;
 
 export interface ParsedAskArgs {
   provider: AskProvider;
@@ -166,6 +183,22 @@ function resolveSignalExitCode(signal: NodeJS.Signals | null): number {
   return 1;
 }
 
+function buildAskAdvisorEnv(
+  cwd: string,
+  originalTask: string,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const overrides: Record<string, string | undefined> = {
+    PATH: env.PATH ?? env.Path ?? '',
+    CODEX_HOME: env.CODEX_HOME,
+    [ASK_ORIGINAL_TASK_ENV]: originalTask,
+  };
+  for (const key of ASK_EXPLICIT_ENV_KEYS) {
+    overrides[key] = env[key];
+  }
+  return buildChildEnv(cwd, overrides);
+}
+
 export async function askCommand(args: string[]): Promise<void> {
   if (args[0] === '--help' || args[0] === '-h') {
     console.log(ASK_USAGE);
@@ -192,10 +225,7 @@ export async function askCommand(args: string[]): Promise<void> {
     [advisorScriptPath, parsed.provider, finalPrompt],
     {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
-        [ASK_ORIGINAL_TASK_ENV]: parsed.prompt,
-      },
+      env: buildAskAdvisorEnv(process.cwd(), parsed.prompt),
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

@@ -36,6 +36,7 @@ import {
 } from '../team/api-interop.js';
 import { teamReadConfig as readTeamConfig, teamReadTaskApproval as readTaskApproval } from '../team/team-ops.js';
 import { recordLeaderRuntimeActivity } from '../team/leader-activity.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 
 type TeamWorkerCli = Exclude<WorkerInfo['worker_cli'], undefined>;
 
@@ -2167,9 +2168,46 @@ export function buildLeaderMonitoringHints(teamName: string): string[] {
   ];
 }
 
+function buildLeaderEnvSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildChildEnv(cwd, {
+    PATH: env.PATH ?? env.Path ?? '',
+    SHELL: env.SHELL,
+    TMUX: env.TMUX,
+    TMUX_PANE: env.TMUX_PANE,
+    CODEX_HOME: env.CODEX_HOME,
+    MSYSTEM: env.MSYSTEM,
+    OSTYPE: env.OSTYPE,
+    WSL_DISTRO_NAME: env.WSL_DISTRO_NAME,
+    WSL_INTEROP: env.WSL_INTEROP,
+    OMX_SESSION_ID: env.OMX_SESSION_ID,
+    CODEX_SESSION_ID: env.CODEX_SESSION_ID,
+    SESSION_ID: env.SESSION_ID,
+    OMX_TEAM_STATE_ROOT: env.OMX_TEAM_STATE_ROOT,
+    OMX_TEAM_LEADER_CWD: env.OMX_TEAM_LEADER_CWD,
+    OMX_TEAM_READY_TIMEOUT_MS: env.OMX_TEAM_READY_TIMEOUT_MS,
+    OMX_TEAM_SKIP_READY_WAIT: env.OMX_TEAM_SKIP_READY_WAIT,
+    OMX_TEAM_WORKER_LAUNCH_ARGS: env.OMX_TEAM_WORKER_LAUNCH_ARGS,
+    OMX_TEAM_WORKER_CLI: env.OMX_TEAM_WORKER_CLI,
+    OMX_TEAM_WORKER_CLI_MAP: env.OMX_TEAM_WORKER_CLI_MAP,
+    OMX_TEAM_WORKER_LAUNCH_MODE: env.OMX_TEAM_WORKER_LAUNCH_MODE,
+    OMX_TEAM_AUTO_INTERRUPT_RETRY: env.OMX_TEAM_AUTO_INTERRUPT_RETRY,
+    OMX_TEAM_AUTO_ACCEPT_BYPASS: env.OMX_TEAM_AUTO_ACCEPT_BYPASS,
+    OMX_TEAM_AUTO_TRUST: env.OMX_TEAM_AUTO_TRUST,
+    OMX_TEAM_MOUSE: env.OMX_TEAM_MOUSE,
+    OMX_TEAM_SEND_STRATEGY: env.OMX_TEAM_SEND_STRATEGY,
+    OMX_TEAM_STRICT_SUBMIT: env.OMX_TEAM_STRICT_SUBMIT,
+    OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT,
+    OMX_MODEL_INSTRUCTIONS_FILE: env.OMX_MODEL_INSTRUCTIONS_FILE,
+    OMX_ARGV_CAPTURE_DIR: env.OMX_ARGV_CAPTURE_DIR,
+    OMX_CODEX_ARGV_CAPTURE_PATH: env.OMX_CODEX_ARGV_CAPTURE_PATH,
+    OMX_GEMINI_ARGV_CAPTURE_PATH: env.OMX_GEMINI_ARGV_CAPTURE_PATH,
+    OMX_TEST_LOG_DIR: env.OMX_TEST_LOG_DIR,
+  });
+}
+
 export async function teamCommand(args: string[], _options: TeamCliOptions = {}): Promise<void> {
   const cwd = process.cwd();
-  const leaderEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };
+  const leaderEnvSnapshot = buildLeaderEnvSnapshot(cwd);
   const parsedWorktree = parseWorktreeMode(args);
   const worktreeMode = resolveDefaultTeamWorktreeMode(parsedWorktree.mode);
   const teamArgs = parsedWorktree.remainingArgs;

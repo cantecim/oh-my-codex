@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { withEnv } from '../../test-support/shared-harness.js';
 import {
   buildClientAttachedReconcileHookName,
   assertTeamWorkerCliBinaryAvailable,
@@ -56,14 +57,7 @@ import * as tmuxSessionModule from '../tmux-session.js';
 type SpawnSyncLike = typeof import('node:child_process').spawnSync;
 
 function withEmptyPath<T>(fn: () => T): T {
-  const prev = process.env.PATH;
-  process.env.PATH = '';
-  try {
-    return fn();
-  } finally {
-    if (typeof prev === 'string') process.env.PATH = prev;
-    else delete process.env.PATH;
-  }
+  return withEnv({ PATH: '' }, fn) as T;
 }
 
 function withMockedExistsSync<T>(mock: typeof fs.existsSync, fn: () => T): T {
@@ -132,16 +126,12 @@ async function withMockTmuxFixture<T>(
   const fakeBinDir = await mkdtemp(join(tmpdir(), dirPrefix));
   const logPath = join(fakeBinDir, 'tmux.log');
   const tmuxStubPath = join(fakeBinDir, 'tmux');
-  const previousPath = process.env.PATH;
 
   try {
     await writeFile(tmuxStubPath, tmuxScript(logPath));
     await chmod(tmuxStubPath, 0o755);
-    process.env.PATH = `${fakeBinDir}:${previousPath ?? ''}`;
-    return await run({ logPath });
+    return await withEnv({ PATH: `${fakeBinDir}:${process.env.PATH ?? ''}` }, async () => run({ logPath }));
   } finally {
-    if (typeof previousPath === 'string') process.env.PATH = previousPath;
-    else delete process.env.PATH;
     await rm(fakeBinDir, { recursive: true, force: true });
   }
 }
@@ -511,14 +501,12 @@ describe('paneLooksReady gate: status-only is not ready (#391)', () => {
 });
 
 describe('buildWorkerStartupCommand', () => {
-  it('auto-selects gemini worker CLI from gemini model', () => {
-    const prevShell = process.env.SHELL;
-    const prevCli = process.env.OMX_TEAM_WORKER_CLI;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    process.env.SHELL = '/bin/bash';
-    delete process.env.OMX_TEAM_WORKER_CLI; // auto
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    try {
+  it('auto-selects gemini worker CLI from gemini model', async () => {
+    await withEnv({
+      SHELL: '/bin/bash',
+      OMX_TEAM_WORKER_CLI: undefined,
+      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+    }, async () => {
       const cmd = buildWorkerStartupCommand(
         'alpha',
         1,
@@ -536,63 +524,39 @@ describe('buildWorkerStartupCommand', () => {
       assert.match(cmd, /(?:^|\s|')-i(?:'|\s|$)/);
       assert.match(cmd, /Read worker inbox/);
       assert.match(cmd, /Read worker inbox/);
-    } finally {
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    }
+    });
   });
 
-  it('auto-selects claude worker CLI from claude model', () => {
-    const prevShell = process.env.SHELL;
-    const prevCli = process.env.OMX_TEAM_WORKER_CLI;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    process.env.SHELL = '/bin/bash';
-    delete process.env.OMX_TEAM_WORKER_CLI; // auto
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    try {
+  it('auto-selects claude worker CLI from claude model', async () => {
+    await withEnv({
+      SHELL: '/bin/bash',
+      OMX_TEAM_WORKER_CLI: undefined,
+      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+    }, async () => {
       const cmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'claude-3-7-sonnet']);
       assert.match(cmd, /exec .*claude/);
       assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
       assert.doesNotMatch(cmd, /--model/);
       assert.doesNotMatch(cmd, /model_instructions_file=/);
-    } finally {
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    }
+    });
   });
 
-  it('respects explicit OMX_TEAM_WORKER_CLI override', () => {
-    const prevShell = process.env.SHELL;
-    const prevCli = process.env.OMX_TEAM_WORKER_CLI;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    process.env.SHELL = '/bin/bash';
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    try {
-      process.env.OMX_TEAM_WORKER_CLI = 'codex';
+  it('respects explicit OMX_TEAM_WORKER_CLI override', async () => {
+    await withEnv({
+      SHELL: '/bin/bash',
+      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+      OMX_TEAM_WORKER_CLI: 'codex',
+    }, async () => {
       const codexCmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'claude-3-7-sonnet']);
       assert.match(codexCmd, /exec .*codex/);
 
-      process.env.OMX_TEAM_WORKER_CLI = 'claude';
-      const claudeCmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'gpt-5']);
-      assert.match(claudeCmd, /exec .*claude/);
-      assert.equal((claudeCmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
-      assert.doesNotMatch(claudeCmd, /--model/);
-    } finally {
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    }
+      await withEnv({ OMX_TEAM_WORKER_CLI: 'claude' }, async () => {
+        const claudeCmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'gpt-5']);
+        assert.match(claudeCmd, /exec .*claude/);
+        assert.equal((claudeCmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
+        assert.doesNotMatch(claudeCmd, /--model/);
+      });
+    });
   });
 
   it('applies claude skip-permissions when worker CLI is provided by plan override', () => {
@@ -621,14 +585,12 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
-  it('drops all explicit launch args for claude workers', () => {
-    const prevShell = process.env.SHELL;
-    const prevCli = process.env.OMX_TEAM_WORKER_CLI;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    process.env.SHELL = '/bin/bash';
-    process.env.OMX_TEAM_WORKER_CLI = 'claude';
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    try {
+  it('drops all explicit launch args for claude workers', async () => {
+    await withEnv({
+      SHELL: '/bin/bash',
+      OMX_TEAM_WORKER_CLI: 'claude',
+      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+    }, async () => {
       const cmd = buildWorkerStartupCommand('alpha', 1, [
         '--dangerously-bypass-approvals-and-sandbox',
         '-c', 'model_instructions_file="/tmp/custom.md"',
@@ -640,38 +602,25 @@ describe('buildWorkerStartupCommand', () => {
       assert.doesNotMatch(cmd, /model_instructions_file=/);
       assert.doesNotMatch(cmd, /--model/);
       assert.doesNotMatch(cmd, /claude-3-7-sonnet/);
-    } finally {
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    }
+    });
   });
 
-  it('does not pass bypass flags in claude mode', () => {
+  it('does not pass bypass flags in claude mode', async () => {
     const prevArgv = process.argv;
-    const prevShell = process.env.SHELL;
-    const prevCli = process.env.OMX_TEAM_WORKER_CLI;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    process.env.SHELL = '/bin/bash';
-    process.env.OMX_TEAM_WORKER_CLI = 'claude';
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
     process.argv = [...prevArgv, '--madmax'];
     try {
-      const cmd = buildWorkerStartupCommand('alpha', 1);
-      assert.match(cmd, /exec .*claude/);
-      assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
-      assert.doesNotMatch(cmd, /dangerously-bypass-approvals-and-sandbox/);
+      await withEnv({
+        SHELL: '/bin/bash',
+        OMX_TEAM_WORKER_CLI: 'claude',
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+      }, async () => {
+        const cmd = buildWorkerStartupCommand('alpha', 1);
+        assert.match(cmd, /exec .*claude/);
+        assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
+        assert.doesNotMatch(cmd, /dangerously-bypass-approvals-and-sandbox/);
+      });
     } finally {
       process.argv = prevArgv;
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     }
   });
 
@@ -743,12 +692,6 @@ describe('buildWorkerStartupCommand', () => {
 
   it('resolves POSIX leader paths before building fish worker startup commands', async () => {
     const fakeBin = await mkdtemp(join(tmpdir(), 'omx-worker-startup-posix-'));
-    const prevPath = process.env.PATH;
-    const prevShell = process.env.SHELL;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    process.env.PATH = fakeBin;
-    process.env.SHELL = '/bin/fish';
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
     try {
       const nodePath = join(fakeBin, 'node');
       const codexPath = join(fakeBin, 'codex');
@@ -757,28 +700,29 @@ describe('buildWorkerStartupCommand', () => {
       await chmod(nodePath, 0o755);
       await chmod(codexPath, 0o755);
 
-      const { buildWorkerStartupCommand: buildFreshWorkerStartupCommand } = await import(`../tmux-session.js?posix-path=${Date.now()}`);
-      const cmd = buildFreshWorkerStartupCommand(
-        'alpha',
-        1,
-        ['-c', 'model_reasoning_effort="low"'],
-        process.cwd(),
-        {},
-        'codex',
-      );
+      await withEnv({
+        PATH: fakeBin,
+        SHELL: '/bin/fish',
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+      }, async () => {
+        const freshModuleUrl = new URL(`../tmux-session.js?posix-path=${Date.now()}`, import.meta.url);
+        const { buildWorkerStartupCommand: buildFreshWorkerStartupCommand } = await import(freshModuleUrl.href);
+        const cmd = buildFreshWorkerStartupCommand(
+          'alpha',
+          1,
+          ['-c', 'model_reasoning_effort="low"'],
+          process.cwd(),
+          {},
+          'codex',
+        );
 
-      assert.match(cmd, new RegExp(escapeRegExp(`OMX_LEADER_NODE_PATH=${nodePath}`)));
-      assert.match(cmd, new RegExp(escapeRegExp(`OMX_LEADER_CLI_PATH=${codexPath}`)));
-      assert.match(cmd, new RegExp(escapeRegExp(`export PATH='\\''${fakeBin}'\\'':$PATH; exec ${codexPath}`)));
-      assert.doesNotMatch(cmd, /export PATH='\\''node'\\'':\$PATH/);
-      assert.doesNotMatch(cmd, / exec codex(?:\s|')/);
+        assert.match(cmd, new RegExp(escapeRegExp(`OMX_LEADER_NODE_PATH=${nodePath}`)));
+        assert.match(cmd, new RegExp(escapeRegExp(`OMX_LEADER_CLI_PATH=${codexPath}`)));
+        assert.match(cmd, new RegExp(escapeRegExp(`export PATH='\\''${fakeBin}'\\'':$PATH; exec ${codexPath}`)));
+        assert.doesNotMatch(cmd, /export PATH='\\''node'\\'':\$PATH/);
+        assert.doesNotMatch(cmd, / exec codex(?:\s|')/);
+      });
     } finally {
-      if (typeof prevPath === 'string') process.env.PATH = prevPath;
-      else delete process.env.PATH;
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
       await rm(fakeBin, { recursive: true, force: true });
     }
   });
@@ -889,35 +833,25 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
-  it('injects model_instructions_file override by default', () => {
-    const prevShell = process.env.SHELL;
-    process.env.SHELL = '/bin/bash';
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    const prevInstr = process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT; // default enabled
-    delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    try {
+  it('injects model_instructions_file override by default', async () => {
+    await withEnv({
+      SHELL: '/bin/bash',
+      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
+      OMX_MODEL_INSTRUCTIONS_FILE: undefined,
+    }, async () => {
       const cmd = buildWorkerStartupCommand('alpha', 1, [], '/tmp/project');
       assert.match(cmd, /'-c'/);
       assert.match(cmd, /model_instructions_file=/);
       assert.match(cmd, /AGENTS\.md/);
-    } finally {
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-      if (typeof prevInstr === 'string') process.env.OMX_MODEL_INSTRUCTIONS_FILE = prevInstr;
-      else delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    }
+    });
   });
 
 
-  it('uses per-worker OMX_MODEL_INSTRUCTIONS_FILE from extraEnv when building process launch spec', () => {
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    const prevInstr = process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    try {
+  it('uses per-worker OMX_MODEL_INSTRUCTIONS_FILE from extraEnv when building process launch spec', async () => {
+    await withEnv({
+      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
+      OMX_MODEL_INSTRUCTIONS_FILE: undefined,
+    }, async () => {
       const spec = buildWorkerProcessLaunchSpec(
         'alpha',
         1,
@@ -929,12 +863,7 @@ describe('buildWorkerStartupCommand', () => {
       const joined = spec.args.join(' ');
       assert.match(joined, /model_reasoning_effort="low"/);
       assert.match(joined, /model_instructions_file="\/tmp\/project\/.omx\/state\/team\/alpha\/workers\/worker-1\/AGENTS\.md"/);
-    } finally {
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-      if (typeof prevInstr === 'string') process.env.OMX_MODEL_INSTRUCTIONS_FILE = prevInstr;
-      else delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    }
+    });
   });
 
   it('does not inject model_instructions_file override when disabled', () => {
@@ -976,30 +905,21 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
-  it('translates model_instructions_file path for MSYS2/Git Bash environments', () => {
-    const prevShell = process.env.SHELL;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    const prevInstructions = process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-    const prevMsystem = process.env.MSYSTEM;
+  it('translates model_instructions_file path for MSYS2/Git Bash environments', async () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-    process.env.SHELL = '/bin/bash';
-    delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT; // default enabled
-    process.env.OMX_MODEL_INSTRUCTIONS_FILE = 'C:\\repo\\AGENTS.md';
-    process.env.MSYSTEM = 'MINGW64';
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
-      assert.match(cmd, /model_instructions_file=\"\/c\/repo\/AGENTS\.md\"/);
+      await withEnv({
+        SHELL: '/bin/bash',
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
+        OMX_MODEL_INSTRUCTIONS_FILE: 'C:\\repo\\AGENTS.md',
+        MSYSTEM: 'MINGW64',
+      }, async () => {
+        const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
+        assert.match(cmd, /model_instructions_file=\"\/c\/repo\/AGENTS\.md\"/);
+      });
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-      if (typeof prevInstructions === 'string') process.env.OMX_MODEL_INSTRUCTIONS_FILE = prevInstructions;
-      else delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
-      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
-      else delete process.env.MSYSTEM;
     }
   });
 
@@ -1036,28 +956,22 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
-  it('uses /bin/sh on MSYS2/Windows regardless of zsh availability', () => {
-    const prevShell = process.env.SHELL;
-    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-    const prevMsystem = process.env.MSYSTEM;
+  it('uses /bin/sh on MSYS2/Windows regardless of zsh availability', async () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-    process.env.SHELL = '/bin/zsh';
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    process.env.MSYSTEM = 'MINGW64';
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
-      assert.match(cmd, /\/bin\/sh/, 'must use /bin/sh on MSYS2/Windows');
-      assert.doesNotMatch(cmd, /\/zsh/, 'must not attempt zsh on Windows');
-      assert.doesNotMatch(cmd, /\.zshrc/, 'must not source zshrc on Windows');
+      await withEnv({
+        SHELL: '/bin/zsh',
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+        MSYSTEM: 'MINGW64',
+      }, async () => {
+        const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
+        assert.match(cmd, /\/bin\/sh/, 'must use /bin/sh on MSYS2/Windows');
+        assert.doesNotMatch(cmd, /\/zsh/, 'must not attempt zsh on Windows');
+        assert.doesNotMatch(cmd, /\.zshrc/, 'must not source zshrc on Windows');
+      });
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
-      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
-      else delete process.env.SHELL;
-      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
-      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
-      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
-      else delete process.env.MSYSTEM;
     }
   });
 
@@ -1611,9 +1525,7 @@ esac
 
 describe('dismissTrustPromptIfPresent capture shape', () => {
   it('uses visible capture-pane argv without tail flags', async () => {
-    const previousAutoTrust = process.env.OMX_TEAM_AUTO_TRUST;
-    delete process.env.OMX_TEAM_AUTO_TRUST;
-    try {
+    await withEnv({ OMX_TEAM_AUTO_TRUST: undefined }, async () => {
       await withMockTmuxFixture(
         'omx-tmux-dismiss-trust-visible-capture-',
         (logPath) => `#!/bin/sh
@@ -1642,10 +1554,7 @@ esac
           assert.doesNotMatch(log, /capture-pane -t omx-team-x:1 -p -S/);
         },
       );
-    } finally {
-      if (typeof previousAutoTrust === 'string') process.env.OMX_TEAM_AUTO_TRUST = previousAutoTrust;
-      else delete process.env.OMX_TEAM_AUTO_TRUST;
-    }
+    });
   });
 });
 
@@ -1656,27 +1565,18 @@ describe('dismissTrustPromptIfPresent', () => {
     });
   });
 
-  it('returns false when OMX_TEAM_AUTO_TRUST is disabled', () => {
-    const prev = process.env.OMX_TEAM_AUTO_TRUST;
-    process.env.OMX_TEAM_AUTO_TRUST = '0';
-    try {
+  it('returns false when OMX_TEAM_AUTO_TRUST is disabled', async () => {
+    await withEnv({ OMX_TEAM_AUTO_TRUST: '0' }, async () => {
       assert.equal(dismissTrustPromptIfPresent('omx-team-x', 1), false);
-    } finally {
-      if (typeof prev === 'string') process.env.OMX_TEAM_AUTO_TRUST = prev;
-      else delete process.env.OMX_TEAM_AUTO_TRUST;
-    }
+    });
   });
 
-  it('returns false when OMX_TEAM_AUTO_TRUST is unset (auto-trust enabled) but tmux unavailable', () => {
-    const prev = process.env.OMX_TEAM_AUTO_TRUST;
-    delete process.env.OMX_TEAM_AUTO_TRUST;
-    try {
+  it('returns false when OMX_TEAM_AUTO_TRUST is unset (auto-trust enabled) but tmux unavailable', async () => {
+    await withEnv({ OMX_TEAM_AUTO_TRUST: undefined }, async () => {
       withEmptyPath(() => {
         assert.equal(dismissTrustPromptIfPresent('omx-team-x', 1), false);
       });
-    } finally {
-      if (typeof prev === 'string') process.env.OMX_TEAM_AUTO_TRUST = prev;
-    }
+    });
   });
 });
 
@@ -1691,45 +1591,28 @@ describe('isWorkerAlive', () => {
 });
 
 describe('isWsl2', () => {
-  it('returns true when WSL_DISTRO_NAME is set', () => {
-    const prev = process.env.WSL_DISTRO_NAME;
-    process.env.WSL_DISTRO_NAME = 'Ubuntu-22.04';
-    try {
+  it('returns true when WSL_DISTRO_NAME is set', async () => {
+    await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
       assert.equal(isWsl2(), true);
-    } finally {
-      if (typeof prev === 'string') process.env.WSL_DISTRO_NAME = prev;
-      else delete process.env.WSL_DISTRO_NAME;
-    }
+    });
   });
 
-  it('returns true when WSL_INTEROP is set and WSL_DISTRO_NAME is absent', () => {
-    const prevDistro = process.env.WSL_DISTRO_NAME;
-    const prevInterop = process.env.WSL_INTEROP;
-    delete process.env.WSL_DISTRO_NAME;
-    process.env.WSL_INTEROP = '/run/WSL/8_interop';
-    try {
+  it('returns true when WSL_INTEROP is set and WSL_DISTRO_NAME is absent', async () => {
+    await withEnv({
+      WSL_DISTRO_NAME: undefined,
+      WSL_INTEROP: '/run/WSL/8_interop',
+    }, async () => {
       assert.equal(isWsl2(), true);
-    } finally {
-      if (typeof prevDistro === 'string') process.env.WSL_DISTRO_NAME = prevDistro;
-      else delete process.env.WSL_DISTRO_NAME;
-      if (typeof prevInterop === 'string') process.env.WSL_INTEROP = prevInterop;
-      else delete process.env.WSL_INTEROP;
-    }
+    });
   });
 
-  it('returns a boolean without throwing when no WSL env vars are present', () => {
-    const prevDistro = process.env.WSL_DISTRO_NAME;
-    const prevInterop = process.env.WSL_INTEROP;
-    delete process.env.WSL_DISTRO_NAME;
-    delete process.env.WSL_INTEROP;
-    try {
+  it('returns a boolean without throwing when no WSL env vars are present', async () => {
+    await withEnv({
+      WSL_DISTRO_NAME: undefined,
+      WSL_INTEROP: undefined,
+    }, async () => {
       assert.equal(typeof isWsl2(), 'boolean');
-    } finally {
-      if (typeof prevDistro === 'string') process.env.WSL_DISTRO_NAME = prevDistro;
-      else delete process.env.WSL_DISTRO_NAME;
-      if (typeof prevInterop === 'string') process.env.WSL_INTEROP = prevInterop;
-      else delete process.env.WSL_INTEROP;
-    }
+    });
   });
 });
 
@@ -1775,49 +1658,42 @@ describe('translatePathForMsys', () => {
 });
 
 describe('isNativeWindows', () => {
-  it('returns true when process.platform is win32 and not WSL2', () => {
+  it('returns true when process.platform is win32 and not WSL2', async () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-    const prevDistro = process.env.WSL_DISTRO_NAME;
-    const prevInterop = process.env.WSL_INTEROP;
-    delete process.env.WSL_DISTRO_NAME;
-    delete process.env.WSL_INTEROP;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      assert.equal(isNativeWindows(), true);
+      await withEnv({
+        WSL_DISTRO_NAME: undefined,
+        WSL_INTEROP: undefined,
+      }, async () => {
+        assert.equal(isNativeWindows(), true);
+      });
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
-      if (typeof prevDistro === 'string') process.env.WSL_DISTRO_NAME = prevDistro;
-      else delete process.env.WSL_DISTRO_NAME;
-      if (typeof prevInterop === 'string') process.env.WSL_INTEROP = prevInterop;
-      else delete process.env.WSL_INTEROP;
     }
   });
 
-  it('returns false when process.platform is win32 but WSL2 is detected', () => {
+  it('returns false when process.platform is win32 but WSL2 is detected', async () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-    const prevDistro = process.env.WSL_DISTRO_NAME;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    process.env.WSL_DISTRO_NAME = 'Ubuntu-22.04';
     try {
-      assert.equal(isNativeWindows(), false);
+      await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
+        assert.equal(isNativeWindows(), false);
+      });
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
-      if (typeof prevDistro === 'string') process.env.WSL_DISTRO_NAME = prevDistro;
-      else delete process.env.WSL_DISTRO_NAME;
     }
   });
 
-  it('returns false on win32 when MSYS2/Git Bash is detected', () => {
+  it('returns false on win32 when MSYS2/Git Bash is detected', async () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-    const prevMsystem = process.env.MSYSTEM;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    process.env.MSYSTEM = 'MINGW64';
     try {
-      assert.equal(isNativeWindows(), false);
+      await withEnv({ MSYSTEM: 'MINGW64' }, async () => {
+        assert.equal(isNativeWindows(), false);
+      });
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
-      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
-      else delete process.env.MSYSTEM;
     }
   });
 
@@ -1857,19 +1733,14 @@ describe('enableMouseScrolling', () => {
     });
   });
 
-  it('returns false in WSL2 environment when tmux is unavailable', () => {
+  it('returns false in WSL2 environment when tmux is unavailable', async () => {
     // WSL2 path: even with the XT override branch active, the function must
     // return false (not throw) when tmux is not on PATH.
-    const prev = process.env.WSL_DISTRO_NAME;
-    process.env.WSL_DISTRO_NAME = 'Ubuntu-22.04';
-    try {
+    await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
       withEmptyPath(() => {
         assert.equal(enableMouseScrolling('omx-team-x'), false);
       });
-    } finally {
-      if (typeof prev === 'string') process.env.WSL_DISTRO_NAME = prev;
-      else delete process.env.WSL_DISTRO_NAME;
-    }
+    });
   });
 });
 
@@ -1942,17 +1813,12 @@ describe('enableMouseScrolling scroll and copy setup (issue #206)', () => {
     });
   });
 
-  it('does not throw when WSL2 env is set and tmux is unavailable (regression + #206)', () => {
-    const prev = process.env.WSL_DISTRO_NAME;
-    process.env.WSL_DISTRO_NAME = 'Ubuntu-22.04';
-    try {
+  it('does not throw when WSL2 env is set and tmux is unavailable (regression + #206)', async () => {
+    await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
       withEmptyPath(() => {
         assert.doesNotThrow(() => enableMouseScrolling('omx-team-x'));
       });
-    } finally {
-      if (typeof prev === 'string') process.env.WSL_DISTRO_NAME = prev;
-      else delete process.env.WSL_DISTRO_NAME;
-    }
+    });
   });
 });
 

@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { getPackageRoot } from '../utils/package.js';
 import { spawnPlatformCommandSync } from '../utils/platform-command.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 import {
   isSparkShellNativeCompatibilityFailure,
   resolveSparkShellBinaryPathWithHydration,
@@ -362,12 +363,21 @@ export async function loadExplorePrompt(parsed: ParsedExploreArgs): Promise<stri
 }
 
 export async function exploreCommand(args: string[]): Promise<void> {
+  const childEnv = buildChildEnv(process.cwd(), {
+    CODEX_HOME: process.env.CODEX_HOME,
+    OMX_EXPLORE_BIN: process.env.OMX_EXPLORE_BIN,
+    OMX_SPARKSHELL_BIN: process.env.OMX_SPARKSHELL_BIN,
+    OMX_EXPLORE_SPARK_MODEL: process.env.OMX_EXPLORE_SPARK_MODEL,
+    OMX_EXPLORE_CODEX_BIN: process.env.OMX_EXPLORE_CODEX_BIN,
+    OMX_NATIVE_MANIFEST_URL: process.env.OMX_NATIVE_MANIFEST_URL,
+    OMX_NATIVE_CACHE_DIR: process.env.OMX_NATIVE_CACHE_DIR,
+  });
   const parsed = parseExploreArgs(args);
   const prompt = await loadExplorePrompt(parsed);
   const sparkShellRoute = resolveExploreSparkShellRoute(prompt);
   if (sparkShellRoute) {
     try {
-      await runExploreViaSparkShell(sparkShellRoute, process.env);
+      await runExploreViaSparkShell(sparkShellRoute, childEnv);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -376,12 +386,12 @@ export async function exploreCommand(args: string[]): Promise<void> {
   }
 
   const packageRoot = getPackageRoot();
-  const harness = await resolveExploreHarnessCommandWithHydration(packageRoot, process.env);
-  const harnessArgs = [...harness.args, ...buildExploreHarnessArgs(prompt, process.cwd(), process.env, packageRoot)];
+  const harness = await resolveExploreHarnessCommandWithHydration(packageRoot, childEnv);
+  const harnessArgs = [...harness.args, ...buildExploreHarnessArgs(prompt, process.cwd(), childEnv, packageRoot)];
 
   const { result } = spawnPlatformCommandSync(harness.command, harnessArgs, {
     cwd: process.cwd(),
-    env: process.env,
+    env: childEnv,
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });

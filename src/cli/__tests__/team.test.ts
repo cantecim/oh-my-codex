@@ -14,33 +14,14 @@ import {
   writeTaskApproval,
   writeWorkerStatus,
 } from '../../team/state.js';
+import { withEnv, withWorkingDir } from '../../test-support/shared-harness.js';
 
 
 function withoutTeamTestWorkerEnv<T>(fn: () => T): T {
-  const previousTeamWorker = process.env.OMX_TEAM_WORKER;
-  const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-  delete process.env.OMX_TEAM_WORKER;
-  delete process.env.OMX_TEAM_STATE_ROOT;
-
-  let restoreImmediately = true;
-  const restore = () => {
-    if (typeof previousTeamWorker === 'string') process.env.OMX_TEAM_WORKER = previousTeamWorker;
-    else delete process.env.OMX_TEAM_WORKER;
-
-    if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
-    else delete process.env.OMX_TEAM_STATE_ROOT;
-  };
-
-  try {
-    const result = fn();
-    if (result instanceof Promise) {
-      restoreImmediately = false;
-      return result.finally(restore) as T;
-    }
-    return result;
-  } finally {
-    if (restoreImmediately) restore();
-  }
+  return withEnv({
+    OMX_TEAM_WORKER: undefined,
+    OMX_TEAM_STATE_ROOT: undefined,
+  }, fn) as T;
 }
 
 describe('parseTeamStartArgs', () => {
@@ -90,68 +71,65 @@ describe('parseTeamStartArgs', () => {
 
   it('reuses the approved team launch hint for a short English follow-up', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-en-'));
-    const previousCwd = process.cwd();
     try {
-      process.chdir(wd);
-      await mkdir(join(wd, '.omx', 'plans'), { recursive: true });
-      await writeFile(
-        join(wd, '.omx', 'plans', 'prd-issue-831.md'),
-        '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 831 plan"\n',
-      );
-      await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-831.md'), '# Test spec\n');
+      await withWorkingDir(wd, async () => {
+        await mkdir(join(wd, '.omx', 'plans'), { recursive: true });
+        await writeFile(
+          join(wd, '.omx', 'plans', 'prd-issue-831.md'),
+          '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 831 plan"\n',
+        );
+        await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-831.md'), '# Test spec\n');
 
-      const result = parseTeamStartArgs(['team']);
-      assert.equal(result.parsed.task, 'Execute approved issue 831 plan');
-      assert.equal(result.parsed.workerCount, 3);
-      assert.equal(result.parsed.agentType, 'executor');
-      assert.equal(result.parsed.explicitWorkerCount, true);
+        const result = parseTeamStartArgs(['team']);
+        assert.equal(result.parsed.task, 'Execute approved issue 831 plan');
+        assert.equal(result.parsed.workerCount, 3);
+        assert.equal(result.parsed.agentType, 'executor');
+        assert.equal(result.parsed.explicitWorkerCount, true);
+      });
     } finally {
-      process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
 
   it('reuses the approved team launch hint for a short Korean follow-up', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-ko-'));
-    const previousCwd = process.cwd();
     try {
-      process.chdir(wd);
-      await mkdir(join(wd, '.omx', 'plans'), { recursive: true });
-      await writeFile(
-        join(wd, '.omx', 'plans', 'prd-issue-831.md'),
-        '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 831 plan"\n',
-      );
-      await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-831.md'), '# Test spec\n');
+      await withWorkingDir(wd, async () => {
+        await mkdir(join(wd, '.omx', 'plans'), { recursive: true });
+        await writeFile(
+          join(wd, '.omx', 'plans', 'prd-issue-831.md'),
+          '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 831 plan"\n',
+        );
+        await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-831.md'), '# Test spec\n');
 
-      const result = parseTeamStartArgs(['team으로', '해줘']);
-      assert.equal(result.parsed.task, 'Execute approved issue 831 plan');
-      assert.equal(result.parsed.workerCount, 3);
+        const result = parseTeamStartArgs(['team으로', '해줘']);
+        assert.equal(result.parsed.task, 'Execute approved issue 831 plan');
+        assert.equal(result.parsed.workerCount, 3);
+      });
     } finally {
-      process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
 
   it('preserves explicit team staffing overrides while reusing the approved plan task', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-override-'));
-    const previousCwd = process.cwd();
     try {
-      process.chdir(wd);
-      await mkdir(join(wd, '.omx', 'plans'), { recursive: true });
-      await writeFile(
-        join(wd, '.omx', 'plans', 'prd-issue-831.md'),
-        '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 831 plan"\n',
-      );
-      await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-831.md'), '# Test spec\n');
+      await withWorkingDir(wd, async () => {
+        await mkdir(join(wd, '.omx', 'plans'), { recursive: true });
+        await writeFile(
+          join(wd, '.omx', 'plans', 'prd-issue-831.md'),
+          '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 831 plan"\n',
+        );
+        await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-831.md'), '# Test spec\n');
 
-      const result = parseTeamStartArgs(['2:debugger', 'team']);
-      assert.equal(result.parsed.task, 'Execute approved issue 831 plan');
-      assert.equal(result.parsed.workerCount, 2);
-      assert.equal(result.parsed.agentType, 'debugger');
-      assert.equal(result.parsed.explicitWorkerCount, true);
-      assert.equal(result.parsed.explicitAgentType, true);
+        const result = parseTeamStartArgs(['2:debugger', 'team']);
+        assert.equal(result.parsed.task, 'Execute approved issue 831 plan');
+        assert.equal(result.parsed.workerCount, 2);
+        assert.equal(result.parsed.agentType, 'debugger');
+        assert.equal(result.parsed.explicitWorkerCount, true);
+        assert.equal(result.parsed.explicitAgentType, true);
+      });
     } finally {
-      process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
@@ -1463,11 +1441,7 @@ describe('teamCommand await', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-await-prompt-dead-'));
     const binDir = join(wd, 'bin');
     const fakeCodexPath = join(binDir, 'codex');
-    const previousCwd = process.cwd();
     const previousPath = process.env.PATH;
-    const previousTmux = process.env.TMUX;
-    const previousLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
-    const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
     const logs: string[] = [];
     const stderr: string[] = [];
     const originalLog = console.log;
@@ -1487,49 +1461,44 @@ process.on('SIGTERM', () => process.exit(0));
     await chmod(fakeCodexPath, 0o755);
 
     try {
-      process.chdir(wd);
-      process.env.PATH = `${binDir}:${previousPath ?? ''}`;
-      delete process.env.TMUX;
-      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
-      process.env.OMX_TEAM_WORKER_CLI = 'codex';
-      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-      process.stderr.write = ((chunk: string | Uint8Array) => {
-        stderr.push(String(chunk));
-        return true;
-      }) as typeof process.stderr.write;
+      await withWorkingDir(wd, async () => {
+        await withEnv({
+          PATH: `${binDir}:${previousPath ?? ''}`,
+          TMUX: undefined,
+          OMX_TEAM_WORKER_LAUNCH_MODE: 'prompt',
+          OMX_TEAM_WORKER_CLI: 'codex',
+        }, async () => {
+          console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+          process.stderr.write = ((chunk: string | Uint8Array) => {
+            stderr.push(String(chunk));
+            return true;
+          }) as typeof process.stderr.write;
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
-      await new Promise((resolve) => setTimeout(resolve, 500));
+          await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+          await new Promise((resolve) => setTimeout(resolve, 500));
 
-      logs.length = 0;
-      stderr.length = 0;
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', teamName]));
-      assert.match(logs.join('\n'), /phase=failed/);
-      assert.doesNotMatch(stderr.join('\n'), /ESRCH/);
+          logs.length = 0;
+          stderr.length = 0;
+          await withoutTeamTestWorkerEnv(() => teamCommand(['status', teamName]));
+          assert.match(logs.join('\n'), /phase=failed/);
+          assert.doesNotMatch(stderr.join('\n'), /ESRCH/);
 
-      logs.length = 0;
-      await withoutTeamTestWorkerEnv(() => teamCommand(['await', teamName, '--json', '--timeout-ms', '250']));
-      const payload = JSON.parse(logs.at(-1) ?? '{}') as {
-        team_name?: string;
-        status?: string;
-        event?: { type?: string; worker?: string; reason?: string | null } | null;
-      };
-      assert.equal(payload.team_name, teamName);
-      assert.equal(payload.status, 'event');
-      assert.equal(payload.event?.type, 'worker_stopped');
-      assert.equal(payload.event?.worker, 'worker-1');
+          logs.length = 0;
+          await withoutTeamTestWorkerEnv(() => teamCommand(['await', teamName, '--json', '--timeout-ms', '250']));
+          const payload = JSON.parse(logs.at(-1) ?? '{}') as {
+            team_name?: string;
+            status?: string;
+            event?: { type?: string; worker?: string; reason?: string | null } | null;
+          };
+          assert.equal(payload.team_name, teamName);
+          assert.equal(payload.status, 'event');
+          assert.equal(payload.event?.type, 'worker_stopped');
+          assert.equal(payload.event?.worker, 'worker-1');
+        });
+      });
     } finally {
       console.log = originalLog;
       process.stderr.write = originalStderrWrite;
-      process.chdir(previousCwd);
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
-      else delete process.env.TMUX;
-      if (typeof previousLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = previousLaunchMode;
-      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
-      if (typeof previousWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = previousWorkerCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
       await rm(wd, { recursive: true, force: true });
     }
   });

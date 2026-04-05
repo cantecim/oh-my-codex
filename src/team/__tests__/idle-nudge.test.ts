@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildIsolatedEnv, withEnv } from '../../test-support/shared-harness.js';
 import { DEFAULT_NUDGE_CONFIG, NudgeTracker, capturePane, isPaneIdle } from '../idle-nudge.js';
 
 function buildFakeTmux(tmuxLogPath: string): string {
@@ -77,45 +78,28 @@ async function withFakeTmux(run: (ctx: {
   const tmuxLogPath = join(root, 'tmux.log');
   const captureSeqPath = join(root, 'capture-seq.txt');
 
-  const prevPath = process.env.PATH;
-  const prevCaptureSeq = process.env.OMX_CAPTURE_SEQ_FILE;
-  const prevCaptureToken = process.env.OMX_CAPTURE_TOKEN;
-  const prevFailSendKeys = process.env.OMX_FAIL_SEND_KEYS;
-  const prevFailCapture = process.env.OMX_FAIL_CAPTURE;
+  const hostPath = buildIsolatedEnv().PATH ?? '';
 
   try {
     await mkdir(binDir, { recursive: true });
     await writeFile(tmuxPath, buildFakeTmux(tmuxLogPath));
     await chmod(tmuxPath, 0o755);
 
-    process.env.PATH = `${binDir}:${prevPath ?? ''}`;
-    process.env.OMX_CAPTURE_SEQ_FILE = captureSeqPath;
-    process.env.OMX_CAPTURE_TOKEN = 'IDLE';
-    delete process.env.OMX_FAIL_SEND_KEYS;
-    delete process.env.OMX_FAIL_CAPTURE;
-
-    await run({
-      tmuxLogPath,
-      setCaptureSequence: async (tokens: string[]) => {
-        await writeFile(captureSeqPath, tokens.join('\n'));
-      },
+    await withEnv({
+      PATH: hostPath ? `${binDir}:${hostPath}` : binDir,
+      OMX_CAPTURE_SEQ_FILE: captureSeqPath,
+      OMX_CAPTURE_TOKEN: 'IDLE',
+      OMX_FAIL_SEND_KEYS: undefined,
+      OMX_FAIL_CAPTURE: undefined,
+    }, async () => {
+      await run({
+        tmuxLogPath,
+        setCaptureSequence: async (tokens: string[]) => {
+          await writeFile(captureSeqPath, tokens.join('\n'));
+        },
+      });
     });
   } finally {
-    if (typeof prevPath === 'string') process.env.PATH = prevPath;
-    else delete process.env.PATH;
-
-    if (typeof prevCaptureSeq === 'string') process.env.OMX_CAPTURE_SEQ_FILE = prevCaptureSeq;
-    else delete process.env.OMX_CAPTURE_SEQ_FILE;
-
-    if (typeof prevCaptureToken === 'string') process.env.OMX_CAPTURE_TOKEN = prevCaptureToken;
-    else delete process.env.OMX_CAPTURE_TOKEN;
-
-    if (typeof prevFailSendKeys === 'string') process.env.OMX_FAIL_SEND_KEYS = prevFailSendKeys;
-    else delete process.env.OMX_FAIL_SEND_KEYS;
-
-    if (typeof prevFailCapture === 'string') process.env.OMX_FAIL_CAPTURE = prevFailCapture;
-    else delete process.env.OMX_FAIL_CAPTURE;
-
     await rm(root, { recursive: true, force: true });
   }
 }

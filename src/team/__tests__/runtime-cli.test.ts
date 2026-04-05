@@ -4,11 +4,11 @@ import { mkdtemp, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { withEnv } from '../../test-support/shared-harness.js';
 import { initTeamState, createTask, readTeamConfig, saveTeamConfig } from '../state.js';
 
 async function loadRuntimeCliModule() {
-  process.env.OMX_RUNTIME_CLI_DISABLE_AUTO_START = '1';
-  return await import('../runtime-cli.js');
+  return await withEnv({ OMX_RUNTIME_CLI_DISABLE_AUTO_START: '1' }, async () => await import('../runtime-cli.js'));
 }
 
 describe('runtime-cli helpers', () => {
@@ -76,55 +76,51 @@ describe('runtime-cli helpers', () => {
 
   it('gracefully shuts down only when the leader explicitly requests shutdown', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-shutdown-'));
-    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-    delete process.env.OMX_TEAM_STATE_ROOT;
     try {
-      await initTeamState('shutdown-fallback', 'task', 'executor', 1, cwd);
-      await createTask('shutdown-fallback', {
-        subject: 'pending task',
-        description: 'blocks graceful shutdown',
-        status: 'pending',
-      }, cwd);
+      await withEnv({ OMX_TEAM_STATE_ROOT: undefined }, async () => {
+        await initTeamState('shutdown-fallback', 'task', 'executor', 1, cwd);
+        await createTask('shutdown-fallback', {
+          subject: 'pending task',
+          description: 'blocks graceful shutdown',
+          status: 'pending',
+        }, cwd);
 
-      const teamRoot = join(cwd, '.omx', 'state', 'team', 'shutdown-fallback');
-      assert.equal(existsSync(teamRoot), true);
+        const teamRoot = join(cwd, '.omx', 'state', 'team', 'shutdown-fallback');
+        assert.equal(existsSync(teamRoot), true);
 
-      const runtimeCli = await loadRuntimeCliModule();
-      await runtimeCli.shutdownWithForceFallback('shutdown-fallback', cwd);
+        const runtimeCli = await loadRuntimeCliModule();
+        await runtimeCli.shutdownWithForceFallback('shutdown-fallback', cwd);
 
-      assert.equal(existsSync(teamRoot), false);
+        assert.equal(existsSync(teamRoot), false);
+      });
     } finally {
-      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
-      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
   it('does not auto-shutdown merely because monitorTeam reaches complete', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-complete-'));
-    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-    delete process.env.OMX_TEAM_STATE_ROOT;
     try {
-      await initTeamState('runtime-cli-complete', 'task', 'executor', 1, cwd);
-      await createTask('runtime-cli-complete', {
-        subject: 'done task',
-        description: 'already complete',
-        status: 'completed',
-        owner: 'worker-1',
-      }, cwd);
+      await withEnv({ OMX_TEAM_STATE_ROOT: undefined }, async () => {
+        await initTeamState('runtime-cli-complete', 'task', 'executor', 1, cwd);
+        await createTask('runtime-cli-complete', {
+          subject: 'done task',
+          description: 'already complete',
+          status: 'completed',
+          owner: 'worker-1',
+        }, cwd);
 
-      const teamRoot = join(cwd, '.omx', 'state', 'team', 'runtime-cli-complete');
-      assert.equal(existsSync(teamRoot), true);
+        const teamRoot = join(cwd, '.omx', 'state', 'team', 'runtime-cli-complete');
+        assert.equal(existsSync(teamRoot), true);
 
-      const runtimeCli = await loadRuntimeCliModule();
-      const snapshot = await (await import('../runtime.js')).monitorTeam('runtime-cli-complete', cwd);
-      assert.equal(snapshot?.phase, 'complete');
+        const runtimeCli = await loadRuntimeCliModule();
+        const snapshot = await (await import('../runtime.js')).monitorTeam('runtime-cli-complete', cwd);
+        assert.equal(snapshot?.phase, 'complete');
 
-      assert.equal(existsSync(teamRoot), true);
-      assert.equal(typeof runtimeCli.shutdownWithForceFallback, 'function');
+        assert.equal(existsSync(teamRoot), true);
+        assert.equal(typeof runtimeCli.shutdownWithForceFallback, 'function');
+      });
     } finally {
-      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
-      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwd, { recursive: true, force: true });
     }
   });

@@ -4,11 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hooksCommand } from '../hooks.js';
+import { withEnv, withWorkingDir } from '../../test-support/shared-harness.js';
 
 async function captureHooksCommand(args: string[], env: { OMX_HOOK_PLUGINS?: string }): Promise<string[]> {
   const cwd = await mkdtemp(join(tmpdir(), 'hooks-command-'));
-  const originalCwd = process.cwd();
-  const originalEnv = process.env.OMX_HOOK_PLUGINS;
   const originalLog = console.log;
   const logs: string[] = [];
 
@@ -16,24 +15,14 @@ async function captureHooksCommand(args: string[], env: { OMX_HOOK_PLUGINS?: str
     logs.push(items.map(String).join(' '));
   };
 
-  if (env.OMX_HOOK_PLUGINS === undefined) {
-    delete process.env.OMX_HOOK_PLUGINS;
-  } else {
-    process.env.OMX_HOOK_PLUGINS = env.OMX_HOOK_PLUGINS;
-  }
-
-  process.chdir(cwd);
-
   try {
-    await hooksCommand(args);
+    await withEnv({ OMX_HOOK_PLUGINS: env.OMX_HOOK_PLUGINS }, async () => {
+      await withWorkingDir(cwd, async () => {
+        await hooksCommand(args);
+      });
+    });
     return logs;
   } finally {
-    process.chdir(originalCwd);
-    if (originalEnv === undefined) {
-      delete process.env.OMX_HOOK_PLUGINS;
-    } else {
-      process.env.OMX_HOOK_PLUGINS = originalEnv;
-    }
     console.log = originalLog;
     await rm(cwd, { recursive: true, force: true });
   }

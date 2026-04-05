@@ -14,6 +14,7 @@ export const AUTO_FORWARDED_TEST_ENV_KEYS = [
   'OMX_TEST_CAPTURE_FILE',
   'OMX_TEST_CAPTURE_SEQUENCE_FILE',
   'OMX_TEST_CAPTURE_COUNTER_FILE',
+  'OMX_TEST_REPO_ROOT',
 ] as const;
 
 // Runtime-affecting env that should never leak implicitly between tests.
@@ -136,6 +137,42 @@ export async function withEnv<T>(
       else process.env[key] = value;
     }
     await recordEnvMutation(cwd, debugEnabled ? beforeSnapshot : null);
+  }
+}
+
+export function createEnvResetHooks(
+  keys: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): { beforeEachHook: () => void; afterEachHook: () => void } {
+  const original = new Map<string, string | undefined>();
+  for (const key of keys) {
+    original.set(key, env[key]);
+  }
+
+  return {
+    beforeEachHook: () => {
+      for (const key of keys) delete env[key];
+    },
+    afterEachHook: () => {
+      for (const key of keys) {
+        const value = original.get(key);
+        if (value === undefined) delete env[key];
+        else env[key] = value;
+      }
+    },
+  };
+}
+
+export async function withWorkingDir<T>(
+  cwd: string,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const previousCwd = process.cwd();
+  process.chdir(cwd);
+  try {
+    return await run();
+  } finally {
+    process.chdir(previousCwd);
   }
 }
 

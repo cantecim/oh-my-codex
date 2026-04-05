@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { setup } from '../setup.js';
 import { addGeneratedAgentsMarker } from '../../utils/agents-md.js';
 import { resolveAgentsModelTableContext, upsertAgentsModelTable } from '../../utils/agents-model-table.js';
+import { withEnv, withWorkingDir } from '../../test-support/shared-harness.js';
 
 function setMockTty(value: boolean): () => void {
   Object.defineProperty(process.stdin, 'isTTY', {
@@ -23,39 +24,32 @@ function setMockTty(value: boolean): () => void {
   };
 }
 
-function setMockHome(home: string): () => void {
-  const previousHome = process.env.HOME;
-  const previousCodexHome = process.env.CODEX_HOME;
-  process.env.HOME = home;
-  process.env.CODEX_HOME = join(home, '.codex');
-  return () => {
-    if (typeof previousHome === 'string') process.env.HOME = previousHome;
-    else delete process.env.HOME;
-    if (typeof previousCodexHome === 'string') process.env.CODEX_HOME = previousCodexHome;
-    else delete process.env.CODEX_HOME;
-  };
+async function withMockHome<T>(home: string, run: () => Promise<T>): Promise<T> {
+  return withEnv({
+    HOME: home,
+    CODEX_HOME: join(home, '.codex'),
+  }, run);
 }
 
 async function runSetupWithCapturedLogs(
   cwd: string,
   options: Parameters<typeof setup>[0]
 ): Promise<string> {
-  const previousCwd = process.cwd();
   const logs: string[] = [];
   const originalLog = console.log;
-  process.chdir(cwd);
   console.log = (...args: unknown[]) => {
     logs.push(args.map((arg) => String(arg)).join(' '));
   };
   try {
-    await setup({
-      modelUpgradePrompt: async () => false,
-      ...options,
+    await withWorkingDir(cwd, async () => {
+      await setup({
+        modelUpgradePrompt: async () => false,
+        ...options,
+      });
     });
     return logs.join('\n');
   } finally {
     console.log = originalLog;
-    process.chdir(previousCwd);
   }
 }
 
@@ -78,24 +72,24 @@ describe('omx setup AGENTS refresh behavior', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-agents-'));
     const restoreTty = setMockTty(true);
     const home = join(wd, 'home');
-    const restoreHome = setMockHome(home);
     const existing = '# project-owned agents file\n';
     try {
-      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
-      await writeFile(join(wd, 'AGENTS.md'), existing);
+      await withMockHome(home, async () => {
+        await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+        await writeFile(join(wd, 'AGENTS.md'), existing);
 
-      const output = await runSetupWithCapturedLogs(wd, {
-        scope: 'user',
+        const output = await runSetupWithCapturedLogs(wd, {
+          scope: 'user',
+        });
+
+        assert.match(output, /Generated AGENTS\.md in .*home\/\.codex\./);
+        assert.match(output, /User scope leaves project AGENTS\.md unchanged\./);
+        assert.match(output, /agents_md: updated=1, unchanged=0, backed_up=0, skipped=0, removed=0/);
+        assert.equal(await readFile(join(wd, 'AGENTS.md'), 'utf-8'), existing);
+        assert.equal(existsSync(join(home, '.codex', 'AGENTS.md')), true);
+        assert.equal(existsSync(join(wd, '.omx', 'backups', 'setup')), false);
       });
-
-      assert.match(output, /Generated AGENTS\.md in .*home\/\.codex\./);
-      assert.match(output, /User scope leaves project AGENTS\.md unchanged\./);
-      assert.match(output, /agents_md: updated=1, unchanged=0, backed_up=0, skipped=0, removed=0/);
-      assert.equal(await readFile(join(wd, 'AGENTS.md'), 'utf-8'), existing);
-      assert.equal(existsSync(join(home, '.codex', 'AGENTS.md')), true);
-      assert.equal(existsSync(join(wd, '.omx', 'backups', 'setup')), false);
     } finally {
-      restoreHome();
       restoreTty();
       await rm(wd, { recursive: true, force: true });
     }
@@ -105,32 +99,32 @@ describe('omx setup AGENTS refresh behavior', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-agents-'));
     const restoreTty = setMockTty(true);
     const home = join(wd, 'home');
-    const restoreHome = setMockHome(home);
     const existing = '# old agents file\n';
     try {
-      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
-      await writeFile(join(wd, 'AGENTS.md'), existing);
+      await withMockHome(home, async () => {
+        await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+        await writeFile(join(wd, 'AGENTS.md'), existing);
 
-      const output = await runSetupWithCapturedLogs(wd, {
-        scope: 'project',
-        agentsOverwritePrompt: async () => true,
+        const output = await runSetupWithCapturedLogs(wd, {
+          scope: 'project',
+          agentsOverwritePrompt: async () => true,
+        });
+
+        const agentsContent = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
+        assert.match(output, /Generated AGENTS\.md in project root\./);
+        assert.match(output, /agents_md: updated=1, unchanged=0, backed_up=1, skipped=0, removed=0/);
+        assert.match(agentsContent, /^<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->/);
+        assert.match(agentsContent, /# oh-my-codex - Intelligent Multi-Agent Orchestration/);
+        assert.doesNotMatch(agentsContent, /# old agents file/);
+
+        const backupsRoot = join(wd, '.omx', 'backups', 'setup');
+        assert.equal(existsSync(backupsRoot), true);
+        const timestamps = await readdir(backupsRoot);
+        assert.equal(timestamps.length, 1);
+        const backupContent = await readFile(join(backupsRoot, timestamps[0], 'AGENTS.md'), 'utf-8');
+        assert.equal(backupContent, existing);
       });
-
-      const agentsContent = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
-      assert.match(output, /Generated AGENTS\.md in project root\./);
-      assert.match(output, /agents_md: updated=1, unchanged=0, backed_up=1, skipped=0, removed=0/);
-      assert.match(agentsContent, /^<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->/);
-      assert.match(agentsContent, /# oh-my-codex - Intelligent Multi-Agent Orchestration/);
-      assert.doesNotMatch(agentsContent, /# old agents file/);
-
-      const backupsRoot = join(wd, '.omx', 'backups', 'setup');
-      assert.equal(existsSync(backupsRoot), true);
-      const timestamps = await readdir(backupsRoot);
-      assert.equal(timestamps.length, 1);
-      const backupContent = await readFile(join(backupsRoot, timestamps[0], 'AGENTS.md'), 'utf-8');
-      assert.equal(backupContent, existing);
     } finally {
-      restoreHome();
       restoreTty();
       await rm(wd, { recursive: true, force: true });
     }
@@ -140,48 +134,48 @@ describe('omx setup AGENTS refresh behavior', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-agents-'));
     const restoreTty = setMockTty(false);
     const home = join(wd, 'home');
-    const restoreHome = setMockHome(home);
     const template = readFileSync(join(process.cwd(), 'templates', 'AGENTS.md'), 'utf-8');
     try {
-      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
-      const existing = upsertAgentsModelTable(
-        addGeneratedAgentsMarker(template),
-        {
-          frontierModel: 'legacy-frontier',
-          sparkModel: 'legacy-spark',
-          subagentDefaultModel: 'legacy-frontier',
-        },
-      );
-      await writeFile(join(wd, 'AGENTS.md'), existing);
+      await withMockHome(home, async () => {
+        await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+        const existing = upsertAgentsModelTable(
+          addGeneratedAgentsMarker(template),
+          {
+            frontierModel: 'legacy-frontier',
+            sparkModel: 'legacy-spark',
+            subagentDefaultModel: 'legacy-frontier',
+          },
+        );
+        await writeFile(join(wd, 'AGENTS.md'), existing);
 
-      const output = await runSetupWithCapturedLogs(wd, {
-        scope: 'project',
+        const output = await runSetupWithCapturedLogs(wd, {
+          scope: 'project',
+        });
+
+        const agentsContent = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
+        const expectedContext = resolveAgentsModelTableContext(
+          await readFile(join(wd, '.codex', 'config.toml'), 'utf-8'),
+          { codexHomeOverride: join(wd, '.codex') },
+        );
+
+        assert.match(output, /Refreshed AGENTS\.md model capability table in project root\./);
+        assert.doesNotMatch(output, /Skipped AGENTS\.md overwrite/);
+        assert.match(
+          agentsContent,
+          new RegExp(`\\| Frontier \\(leader\\) \\| \`${expectedContext.frontierModel}\` \\| high \\|`),
+        );
+        assert.match(
+          agentsContent,
+          new RegExp(`\\| Spark \\(explorer\\/fast\\) \\| \`${expectedContext.sparkModel}\` \\| low \\|`),
+        );
+        assert.match(
+          agentsContent,
+          new RegExp(String.raw`\| \`executor\` \| \`${expectedContext.frontierModel}\` \| high \| Code implementation, refactoring, feature work`),
+        );
+        assert.doesNotMatch(agentsContent, /legacy-frontier/);
+        assert.doesNotMatch(agentsContent, /legacy-spark/);
       });
-
-      const agentsContent = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
-      const expectedContext = resolveAgentsModelTableContext(
-        await readFile(join(wd, '.codex', 'config.toml'), 'utf-8'),
-        { codexHomeOverride: join(wd, '.codex') },
-      );
-
-      assert.match(output, /Refreshed AGENTS\.md model capability table in project root\./);
-      assert.doesNotMatch(output, /Skipped AGENTS\.md overwrite/);
-      assert.match(
-        agentsContent,
-        new RegExp(`\\| Frontier \\(leader\\) \\| \`${expectedContext.frontierModel}\` \\| high \\|`),
-      );
-      assert.match(
-        agentsContent,
-        new RegExp(`\\| Spark \\(explorer\\/fast\\) \\| \`${expectedContext.sparkModel}\` \\| low \\|`),
-      );
-      assert.match(
-        agentsContent,
-        new RegExp(String.raw`\| \`executor\` \| \`${expectedContext.frontierModel}\` \| high \| Code implementation, refactoring, feature work`),
-      );
-      assert.doesNotMatch(agentsContent, /legacy-frontier/);
-      assert.doesNotMatch(agentsContent, /legacy-spark/);
     } finally {
-      restoreHome();
       restoreTty();
       await rm(wd, { recursive: true, force: true });
     }
@@ -191,23 +185,23 @@ describe('omx setup AGENTS refresh behavior', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-agents-'));
     const restoreTty = setMockTty(true);
     const home = join(wd, 'home');
-    const restoreHome = setMockHome(home);
     const existing = '# keep this agents file\n';
     try {
-      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
-      await writeFile(join(wd, 'AGENTS.md'), existing);
+      await withMockHome(home, async () => {
+        await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+        await writeFile(join(wd, 'AGENTS.md'), existing);
 
-      const output = await runSetupWithCapturedLogs(wd, {
-        scope: 'project',
-        agentsOverwritePrompt: async () => false,
+        const output = await runSetupWithCapturedLogs(wd, {
+          scope: 'project',
+          agentsOverwritePrompt: async () => false,
+        });
+
+        assert.match(output, /Skipped AGENTS\.md overwrite/);
+        assert.match(output, /agents_md: updated=0, unchanged=0, backed_up=0, skipped=1, removed=0/);
+        assert.equal(await readFile(join(wd, 'AGENTS.md'), 'utf-8'), existing);
+        assert.equal(existsSync(join(wd, '.omx', 'backups', 'setup')), false);
       });
-
-      assert.match(output, /Skipped AGENTS\.md overwrite/);
-      assert.match(output, /agents_md: updated=0, unchanged=0, backed_up=0, skipped=1, removed=0/);
-      assert.equal(await readFile(join(wd, 'AGENTS.md'), 'utf-8'), existing);
-      assert.equal(existsSync(join(wd, '.omx', 'backups', 'setup')), false);
     } finally {
-      restoreHome();
       restoreTty();
       await rm(wd, { recursive: true, force: true });
     }
@@ -217,35 +211,35 @@ describe('omx setup AGENTS refresh behavior', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-agents-'));
     const restoreTty = setMockTty(true);
     const home = join(wd, 'home');
-    const restoreHome = setMockHome(home);
     const existing = '# active session file\n';
     try {
-      const pidStartTicks = await readCurrentLinuxStartTicks();
-      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
-      await writeFile(join(wd, 'AGENTS.md'), existing);
-      await writeFile(
-        join(wd, '.omx', 'state', 'session.json'),
-        JSON.stringify({
-          session_id: 'sess-test',
-          started_at: new Date().toISOString(),
-          cwd: wd,
-          pid: process.pid,
-          pid_start_ticks: pidStartTicks,
-        }, null, 2)
-      );
+      await withMockHome(home, async () => {
+        const pidStartTicks = await readCurrentLinuxStartTicks();
+        await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+        await writeFile(join(wd, 'AGENTS.md'), existing);
+        await writeFile(
+          join(wd, '.omx', 'state', 'session.json'),
+          JSON.stringify({
+            session_id: 'sess-test',
+            started_at: new Date().toISOString(),
+            cwd: wd,
+            pid: process.pid,
+            pid_start_ticks: pidStartTicks,
+          }, null, 2)
+        );
 
-      const output = await runSetupWithCapturedLogs(wd, {
-        scope: 'project',
+        const output = await runSetupWithCapturedLogs(wd, {
+          scope: 'project',
+        });
+
+        assert.match(output, /WARNING: Active omx session detected/);
+        assert.match(output, /Skipping AGENTS\.md overwrite to avoid corrupting runtime overlay\./);
+        assert.match(output, /Stop the active session first, then re-run setup\./);
+        assert.match(output, /agents_md: updated=0, unchanged=0, backed_up=0, skipped=1, removed=0/);
+        assert.equal(await readFile(join(wd, 'AGENTS.md'), 'utf-8'), existing);
+        assert.equal(existsSync(join(wd, '.omx', 'backups', 'setup')), false);
       });
-
-      assert.match(output, /WARNING: Active omx session detected/);
-      assert.match(output, /Skipping AGENTS\.md overwrite to avoid corrupting runtime overlay\./);
-      assert.match(output, /Stop the active session first, then re-run setup\./);
-      assert.match(output, /agents_md: updated=0, unchanged=0, backed_up=0, skipped=1, removed=0/);
-      assert.equal(await readFile(join(wd, 'AGENTS.md'), 'utf-8'), existing);
-      assert.equal(existsSync(join(wd, '.omx', 'backups', 'setup')), false);
     } finally {
-      restoreHome();
       restoreTty();
       await rm(wd, { recursive: true, force: true });
     }

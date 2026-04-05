@@ -398,6 +398,7 @@ Her pass sonunda:
 Program final acceptance'ta ayrıca:
 
 1. residual `withEnv` sweep kullanıcıya hatırlatılır, yapılana kadar uyarılır.
+2. `applyTmuxEnv` ve benzeri helper-level env restore / ambient-read residual'ları final sweep'te ayrıca gündeme getirilir; kapanmadan önce kullanıcı açıkça uyarılır.
 
 Drift özel notu:
 

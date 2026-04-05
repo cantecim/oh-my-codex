@@ -636,6 +636,7 @@ export function buildWorkerStartupCommand(
   extraEnv: Record<string, string> = {},
   workerCliOverride?: TeamWorkerCli,
   initialPrompt?: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   const processSpec = buildWorkerProcessLaunchSpec(
     teamName,
@@ -645,8 +646,9 @@ export function buildWorkerStartupCommand(
     extraEnv,
     workerCliOverride,
     initialPrompt,
+    env,
   );
-  const launchSpec = buildWorkerLaunchSpec(process.env.SHELL);
+  const launchSpec = buildWorkerLaunchSpec(env.SHELL);
   const leaderNodeDir = resolveLeaderNodePath().replace(/\/[^/]+$/, ''); // dirname
   const pathPrefix = leaderNodeDir ? `export PATH='${leaderNodeDir}':$PATH; ` : '';
   const quotedArgs = processSpec.args.map(shellQuoteSingle).join(' ');
@@ -666,8 +668,12 @@ export function buildWorkerProcessLaunchSpec(
   extraEnv: Record<string, string> = {},
   workerCliOverride?: TeamWorkerCli,
   initialPrompt?: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): WorkerProcessLaunchSpec {
-  const effectiveEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  const effectiveEnv: NodeJS.ProcessEnv = Object.assign(
+    Object.fromEntries(Object.entries(env)) as NodeJS.ProcessEnv,
+    extraEnv,
+  );
   const fullLaunchArgs = resolveWorkerLaunchArgs(launchArgs, cwd, effectiveEnv);
   const workerCli = workerCliOverride ?? resolveTeamWorkerCli(fullLaunchArgs, effectiveEnv);
   const cliLaunchArgs = translateWorkerLaunchArgsForCli(workerCli, fullLaunchArgs, initialPrompt);
@@ -718,8 +724,8 @@ export function sanitizeTeamName(name: string): string {
  * WSL2 always sets WSL_DISTRO_NAME; WSL_INTEROP is also present.
  * Fallback: check /proc/version for the Microsoft kernel string.
  */
-export function isWsl2(): boolean {
-  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) {
+export function isWsl2(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) {
     return true;
   }
   try {
@@ -734,8 +740,8 @@ export function isWsl2(): boolean {
  * Detect whether the process is running on native Windows (not WSL2).
  * OMX requires tmux, which is unavailable on native Windows.
  */
-export function isNativeWindows(): boolean {
-  return process.platform === 'win32' && !isWsl2() && !isMsysOrGitBash();
+export function isNativeWindows(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' && !isWsl2(env) && !isMsysOrGitBash(env, platform);
 }
 
 // Check if tmux is available
@@ -760,6 +766,7 @@ export function createTeamSession(
     launchArgs?: string[];
     workerCli?: TeamWorkerCli;
   }> = [],
+  env: NodeJS.ProcessEnv = process.env,
 ): TeamSession {
   if (!isTmuxAvailable()) {
     throw new Error('tmux is not available');
@@ -767,11 +774,11 @@ export function createTeamSession(
   if (!Number.isInteger(workerCount) || workerCount < 1) {
     throw new Error(`workerCount must be >= 1 (got ${workerCount})`);
   }
-  if (!process.env.TMUX) {
+  if (!env.TMUX) {
     throw new Error('team mode requires running inside tmux leader pane');
   }
-  const normalizedWorkerLaunchArgs = resolveWorkerLaunchArgs(workerLaunchArgs, cwd);
-  const defaultWorkerCliPlan = resolveTeamWorkerCliPlan(workerCount, normalizedWorkerLaunchArgs, process.env);
+  const normalizedWorkerLaunchArgs = resolveWorkerLaunchArgs(workerLaunchArgs, cwd, env);
+  const defaultWorkerCliPlan = resolveTeamWorkerCliPlan(workerCount, normalizedWorkerLaunchArgs, env);
   const workerCliPlan = workerStartups.length > 0
     ? workerStartups.map((startup, index) => startup.workerCli ?? defaultWorkerCliPlan[index]!)
     : defaultWorkerCliPlan;
@@ -784,7 +791,7 @@ export function createTeamSession(
   let registeredClientAttachedHook: { name: string; target: string } | null = null;
   const rollbackPaneIds: string[] = [];
   try {
-    const tmuxPaneTarget = process.env.TMUX_PANE;
+    const tmuxPaneTarget = env.TMUX_PANE;
     const displayArgs = tmuxPaneTarget
       ? ['display-message', '-p', '-t', tmuxPaneTarget, '#S:#I #{pane_id}']
       : ['display-message', '-p', '#S:#I #{pane_id}'];
@@ -824,6 +831,7 @@ export function createTeamSession(
         workerEnv,
         workerCliPlan[i - 1],
         startup.initialPrompt,
+        env,
       );
       // First split creates the right side from leader. Remaining splits stack on the right.
       const splitDirection = i === 1 ? '-h' : '-v';
@@ -930,7 +938,7 @@ export function createTeamSession(
     // mouse wheel without conflicting with keyboard up/down arrow-key input
     // history navigation in the Codex CLI input field. (issue #103)
     // Opt-out: set OMX_TEAM_MOUSE=0 in the environment.
-    if (process.env.OMX_TEAM_MOUSE !== '0') {
+    if (env.OMX_TEAM_MOUSE !== '0') {
       enableMouseScrolling(sessionName);
     }
 
