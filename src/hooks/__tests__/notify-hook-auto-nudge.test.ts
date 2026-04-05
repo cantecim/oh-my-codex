@@ -62,7 +62,11 @@ function escapeRegex(value: string): string {
   return value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
 }
 
-function buildFakeTmux(tmuxLogPath: string, paneInMode: '0' | '1' = '0'): string {
+function buildFakeTmux(
+  tmuxLogPath: string,
+  paneInMode: '0' | '1' = '0',
+  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+): string {
   return buildFakeTmuxScript(tmuxLogPath, {
     defaultProbe: {
       paneInMode,
@@ -74,6 +78,7 @@ function buildFakeTmux(tmuxLogPath: string, paneInMode: '0' | '1' = '0'): string
         startCommand: 'codex --model gpt-5',
       },
     },
+    ...options,
   });
 }
 
@@ -390,67 +395,24 @@ describe('notify-hook auto-nudge', () => {
         tmux_pane_id: '%99',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "sh"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%100" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%100" ]]; then
-    echo "codex --model gpt-5"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%100" ]]; then
-    echo "0"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  target=""
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      -t) target="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$target" == "devsess" ]]; then
-    printf "%%99\tsh\tbash\n%%100\tnode\tcodex --model gpt-5\n"
-    exit 0
-  fi
-  echo "%1 12345"
-  exit 0
-fi
-if [[ "$cmd" == "capture-pane" ]]; then
-  printf "How can I help?\n› "
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-exit 0
-`;
+      const fakeTmux = buildFakeTmux(tmuxLogPath, '0', {
+        paneProbes: {
+          '%99': {
+            currentCommand: 'sh',
+            sessionName: 'devsess',
+          },
+          '%100': {
+            currentCommand: 'node',
+            startCommand: 'codex --model gpt-5',
+            paneInMode: '0',
+          },
+        },
+        listPaneTargets: {
+          devsess: ['%99\tsh\tbash', '%100\tnode\tcodex --model gpt-5'],
+        },
+        listPaneLines: ['%1 12345'],
+        captureOutput: 'How can I help?\n› ',
+      });
       await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
@@ -554,40 +516,14 @@ exit 0
         autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "zsh"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "capture-pane" ]]; then
-  printf "Would you like me to continue?\\n"
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "%1 12345"
-  exit 0
-fi
-exit 0
-`;
+      const fakeTmux = buildFakeTmux(tmuxLogPath, '0', {
+        paneProbes: {
+          '%99': {
+            currentCommand: 'zsh',
+          },
+        },
+        captureOutput: 'Would you like me to continue?\n',
+      });
       await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
@@ -620,71 +556,25 @@ exit 0
         autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-  if [[ "$cmd" == "display-message" ]]; then
-    target=""
-    format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "sh"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%100" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%100" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%100" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "capture-pane" ]]; then
-  printf "› say \\"if you want\\"\\n\\n• if you want\\n\\n› Implement {feature}\\n\\n  gpt-5.4 high · dev · 98%% left\\n"
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  target=""
-  while (($#)); do
-    case "$1" in
-      -t) target="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$target" == "devsess" ]]; then
-    printf "%%99\t1\tsh\\n%%100\t0\tcodex --model gpt-5\\n"
-    exit 0
-  fi
-  echo "%1 12345"
-  exit 0
-fi
-exit 0
-`;
+      const fakeTmux = buildFakeTmux(tmuxLogPath, '0', {
+        paneProbes: {
+          '%99': {
+            currentCommand: 'sh',
+            sessionName: 'devsess',
+            currentPath: cwd,
+          },
+          '%100': {
+            currentCommand: 'node',
+            sessionName: 'devsess',
+            currentPath: cwd,
+          },
+        },
+        listPaneTargets: {
+          devsess: ['%99\t1\tsh', '%100\t0\tcodex --model gpt-5'],
+        },
+        listPaneLines: ['%1 12345'],
+        captureOutput: '› say "if you want"\n\n• if you want\n\n› Implement {feature}\n\n  gpt-5.4 high · dev · 98% left\n',
+      });
       await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 

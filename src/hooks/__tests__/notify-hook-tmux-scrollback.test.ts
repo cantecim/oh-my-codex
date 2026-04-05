@@ -38,11 +38,14 @@ async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf-8')) as T;
 }
 
+type FakeTmuxOptions = Parameters<typeof buildFakeTmuxScript>[1];
+
 /** Build a fake tmux binary that responds to all required commands.
  *  paneInMode: '0' or '1' — the value returned for #{pane_in_mode}.
  */
-function fakeTmuxScript(cwd: string, paneInMode: '0' | '1'): string {
+function buildFakeTmux(cwd: string, paneInMode: '0' | '1', options: FakeTmuxOptions = {}): string {
   return buildFakeTmuxScript(join(cwd, 'tmux.log'), {
+    ...options,
     defaultProbe: {
       paneId: '%42',
       paneInMode,
@@ -50,8 +53,9 @@ function fakeTmuxScript(cwd: string, paneInMode: '0' | '1'): string {
       currentCommand: 'node',
       startCommand: 'codex --model gpt-5',
       sessionName: 'devsess',
+      ...(options.defaultProbe ?? {}),
     },
-    listPaneLines: ['%42 1'],
+    listPaneLines: options.listPaneLines ?? ['%42 1'],
   });
 }
 
@@ -83,7 +87,7 @@ async function setupFixture(cwd: string, paneInMode: '0' | '1', skipIfScrolling 
     skip_if_scrolling: skipIfScrolling,
   });
 
-  await writeFile(fakeTmuxPath, fakeTmuxScript(cwd, paneInMode));
+  await writeFile(fakeTmuxPath, buildFakeTmux(cwd, paneInMode));
   await chmod(fakeTmuxPath, 0o755);
 
   return { stateDir, fakeBinDir, hookStatePath: join(stateDir, 'tmux-hook-state.json') };

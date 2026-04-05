@@ -44,19 +44,25 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
-function buildFakeTmux(tmuxLogPath: string): string {
+function buildFakeTmux(
+  tmuxLogPath: string,
+  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+): string {
   return buildFakeTmuxScript(tmuxLogPath, {
+    ...options,
     paneProbes: {
       '%99': {
         currentCommand: 'node',
         startCommand: 'codex --model gpt-5',
         sessionName: 'devsess',
       },
+      ...(options.paneProbes ?? {}),
     },
     defaultProbe: {
       sessionName: 'devsess',
+      ...(options.defaultProbe ?? {}),
     },
-    listPaneLines: ['%1 12345'],
+    listPaneLines: options.listPaneLines ?? ['%1 12345'],
   });
 }
 

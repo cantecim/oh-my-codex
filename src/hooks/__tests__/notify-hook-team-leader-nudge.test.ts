@@ -26,10 +26,17 @@ function buildFakeTmux(tmuxLogPath: string): string {
   });
 }
 
-function buildFakeTmuxWithListPanes(tmuxLogPath: string, listPaneLines: string[]): string {
+type FakeTmuxOptions = Parameters<typeof buildFakeTmuxScript>[1];
+
+function buildTeamLeaderTmux(tmuxLogPath: string, options: FakeTmuxOptions = {}): string {
   return buildFakeTmuxScript(tmuxLogPath, {
-    listPaneLines,
+    ...options,
+    listPaneLines: options.listPaneLines ?? ['%1 12345', '%2 12346'],
   });
+}
+
+function buildFakeTmuxWithListPanes(tmuxLogPath: string, listPaneLines: string[]): string {
+  return buildTeamLeaderTmux(tmuxLogPath, { listPaneLines });
 }
 
 function runNotifyHook(
@@ -1030,14 +1037,13 @@ describe('notify-hook team leader nudge', { concurrency: false }, () => {
       });
 
       await writeFile(tmuxLogPath, '');
-      await writeFile(fakeTmuxPath, buildFakeTmuxScript(tmuxLogPath, {
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath, {
         paneProbes: {
           '%71': {
             paneInMode: '0',
             currentCommand: 'zsh',
           },
         },
-        listPaneLines: ['%1 12345'],
       }));
       await chmod(fakeTmuxPath, 0o755);
 
@@ -1095,14 +1101,13 @@ describe('notify-hook team leader nudge', { concurrency: false }, () => {
       });
 
       await writeFile(tmuxLogPath, '');
-      await writeFile(fakeTmuxPath, buildFakeTmuxScript(tmuxLogPath, {
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath, {
         paneProbes: {
           '%72': {
             paneInMode: '1',
             currentCommand: 'codex',
           },
         },
-        listPaneLines: ['%1 12345'],
       }));
       await chmod(fakeTmuxPath, 0o755);
 

@@ -4,13 +4,21 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildFakeTmuxScript } from '../../test-support/shared-harness.js';
+import {
+  buildDebugChildEnv,
+  buildFakeTmuxScript,
+  buildIsolatedEnv,
+} from '../../test-support/shared-harness.js';
 
-function buildFakeTmux(tmuxLogPath: string): string {
-  return buildFakeTmuxScript(tmuxLogPath);
+function buildFakeTmux(
+  tmuxLogPath: string,
+  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+): string {
+  return buildFakeTmuxScript(tmuxLogPath, options);
 }
 
 function runSendPaneInputInChild(params: {
+  cwd: string;
   fakeBinDir: string;
   moduleUrl: string;
   paneTarget: string;
@@ -30,11 +38,14 @@ function runSendPaneInputInChild(params: {
     process.stdout.write(JSON.stringify(result));
   `;
   return spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: params.cwd,
     encoding: 'utf-8',
-    env: {
-      ...process.env,
+    env: buildIsolatedEnv({
+      ...buildDebugChildEnv(params.cwd),
       PATH: `${params.fakeBinDir}:${process.env.PATH ?? ''}`,
-    },
+      TMUX: '',
+      TMUX_PANE: '',
+    }),
   });
 }
 
@@ -51,6 +62,7 @@ describe('notify-hook team tmux guard bridge', () => {
 
       const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;
       const result = runSendPaneInputInChild({
+        cwd,
         fakeBinDir,
         moduleUrl,
         paneTarget: '%42',
@@ -87,6 +99,7 @@ describe('notify-hook team tmux guard bridge', () => {
 
       const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;
       const result = runSendPaneInputInChild({
+        cwd,
         fakeBinDir,
         moduleUrl,
         paneTarget: '%42',

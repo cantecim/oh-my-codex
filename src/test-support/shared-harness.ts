@@ -129,6 +129,9 @@ export interface FakeTmuxScriptOptions {
   listPaneLines?: string[];
   sessionPaneLines?: string[];
   allPaneLines?: string[];
+  listPaneTargets?: Record<string, string[]>;
+  captureOutput?: string;
+  captureSequence?: string[];
   failSendKeys?: boolean;
   failSendKeysMatch?: string;
   unsupportedExitCode?: 0 | 1;
@@ -182,6 +185,20 @@ function buildListPaneBlock(varName: string, values: string[] | undefined): stri
   fi`;
 }
 
+function buildTargetedListPaneBlocks(targets: Record<string, string[]> | undefined): string {
+  if (!targets) return '';
+  const blocks: string[] = [];
+  for (const [target, values] of Object.entries(targets)) {
+    if (!values || values.length === 0) continue;
+    const escaped = values.map((value) => escapePrintf(value)).join('\\n');
+    blocks.push(`if [[ "$target" == ${quoteBash(target)} ]]; then
+    printf "%b\\n" "${escaped}"
+    exit 0
+  fi`);
+  }
+  return blocks.join('\n  ');
+}
+
 export function buildFakeTmuxScript(
   tmuxLogPath: string,
   options: FakeTmuxScriptOptions = {},
@@ -192,6 +209,10 @@ export function buildFakeTmuxScript(
   const tmuxMetaPath = `${tmuxLogPath}.meta.jsonl`;
   const defaultListPaneLines = options.listPaneLines ?? ['%1 12345'];
   const defaultListPaneBlock = buildListPaneBlock('__tmux_default_list_panes', defaultListPaneLines);
+  const targetedListPaneBlocks = buildTargetedListPaneBlocks(options.listPaneTargets);
+  const captureOutput = options.captureOutput ? quoteBash(options.captureOutput) : '""';
+  const captureSequence = options.captureSequence ?? [];
+  const captureSequenceLines = captureSequence.map((line) => quoteBash(line)).join(' ');
   const defaultProbe: FakeTmuxProbeConfig = {
     paneInMode: '0',
     currentCommand: 'codex',
@@ -242,6 +263,24 @@ if [[ "$cmd" == "capture-pane" ]]; then
   fi
   if [[ -n "\${OMX_TEST_CAPTURE_FILE:-}" && -f "\${OMX_TEST_CAPTURE_FILE}" ]]; then
     cat "\${OMX_TEST_CAPTURE_FILE}"
+    exit 0
+  fi
+  if [[ ${captureSequence.length} -gt 0 ]]; then
+    counterFile="\${OMX_TEST_CAPTURE_COUNTER_FILE:-${tmuxLogPath}.capture.idx}"
+    idx=0
+    if [[ -f "$counterFile" ]]; then idx="$(cat "$counterFile")"; fi
+    __capture_sequence=( ${captureSequenceLines} )
+    if (( idx >= \${#__capture_sequence[@]} )); then
+      idx=$(( \${#__capture_sequence[@]} - 1 ))
+    fi
+    if (( idx >= 0 )); then
+      printf "%s\\n" "\${__capture_sequence[$idx]}"
+      echo "$((idx + 1))" > "$counterFile"
+      exit 0
+    fi
+  fi
+  if [[ -n ${captureOutput} ]]; then
+    printf "%s" ${captureOutput}
   fi
   exit 0
 fi
@@ -277,15 +316,17 @@ if [[ "$cmd" == "list-panes" ]]; then
   __tmux_default_list_panes=1
   allPanes=0
   sessionPanes=0
+  target=""
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       -a) allPanes=1; shift ;;
       -s) sessionPanes=1; shift ;;
       -F) shift 2 ;;
-      -t) shift 2 ;;
+      -t) target="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
+  ${targetedListPaneBlocks}
   ${buildListPaneBlock('allPanes', options.allPaneLines)}
   ${buildListPaneBlock('sessionPanes', options.sessionPaneLines ?? options.listPaneLines)}
   ${defaultListPaneBlock}

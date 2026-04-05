@@ -5,6 +5,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  buildFakeTmuxScript,
   buildDebugChildEnv,
   buildIsolatedEnv,
   readJson,
@@ -63,6 +64,17 @@ async function prepareTmuxHealHarness(
   return { fakeTmuxPath, tmuxLogPath };
 }
 
+function buildFakeTmuxHealScript(
+  tmuxLogPath: string,
+  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+): string {
+  return buildFakeTmuxScript(tmuxLogPath, {
+    listPaneLines: [],
+    unsupportedExitCode: 1,
+    ...options,
+  });
+}
+
 describe('notify-hook tmux target healing', { concurrency: false }, () => {
   it('falls back to global mode state when scoped session has no allowed active mode', async () => {
     await withTempWorkingDir(async (cwd) => {
@@ -78,7 +90,7 @@ describe('notify-hook tmux target healing', { concurrency: false }, () => {
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+      const { fakeTmuxPath, tmuxLogPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
         case: 'cwd-mismatch-fallback-pane',
       });
 
@@ -97,41 +109,15 @@ describe('notify-hook tmux target healing', { concurrency: false }, () => {
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%42" ]]; then
-    echo "0"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentCommand: 'codex',
+            paneInMode: '0',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -162,7 +148,7 @@ exit 1
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+      const { fakeTmuxPath, tmuxLogPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
         case: 'stale-hud-heal',
       });
 
@@ -180,72 +166,20 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "list-panes" ]]; then
-  target=""
-  while (($#)); do
-    case "$1" in
-      -t) target="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$target" == "devsess" ]]; then
-    echo "%42 1"
-    exit 0
-  fi
-  echo "can't find session: $target" >&2
-  exit 1
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        listPaneTargets: {
+          devsess: ['%42 1'],
+        },
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentCommand: 'codex',
+            startCommand: 'codex',
+            currentPath: cwd,
+            sessionName: 'devsess',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -281,7 +215,7 @@ exit 1
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+      const { fakeTmuxPath, tmuxLogPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
         case: 'active-mode-pane-id',
       });
 
@@ -299,72 +233,20 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "list-panes" ]]; then
-  target=""
-  while (($#)); do
-    case "$1" in
-      -t) target="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$target" == "devsess" ]]; then
-    echo "%42 1"
-    exit 0
-  fi
-  echo "can't find session: $target" >&2
-  exit 1
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
-    echo "/tmp/not-the-hook-cwd"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        listPaneTargets: {
+          devsess: ['%42 1'],
+        },
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentCommand: 'codex',
+            startCommand: 'codex',
+            currentPath: '/tmp/not-the-hook-cwd',
+            sessionName: 'devsess',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -396,7 +278,7 @@ exit 1
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+      const { fakeTmuxPath, tmuxLogPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
         case: 'scoped-mode-pane-precedence',
       });
 
@@ -414,63 +296,19 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "list-panes" ]]; then
-  all=false
-  target=""
-  while (($#)); do
-    case "$1" in
-      -a) all=true; shift ;;
-      -t) target="$2"; shift 2 ;;
-      -F) shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$all" == "true" ]]; then
-    echo "%42\t${cwd}\t1\tdevsess"
-    exit 0
-  fi
-  if [[ "$target" == "devsess" ]]; then
-    echo "%42 1"
-    exit 0
-  fi
-  echo "can't find session: $target" >&2
-  exit 1
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        allPaneLines: [`%42\t${cwd}\t1\tdevsess`],
+        listPaneTargets: {
+          devsess: ['%42 1'],
+        },
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentPath: cwd,
+            sessionName: 'devsess',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -500,7 +338,7 @@ exit 1
       await mkdir(sessionStateDir, { recursive: true });
       await mkdir(logsDir, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      const { fakeTmuxPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
+      const { fakeTmuxPath, tmuxLogPath } = await prepareTmuxHealHarness(cwd, fakeBinDir, {
         case: 'busy-pane-skip',
       });
 
@@ -518,59 +356,22 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_id}" && "$target" == "%77" ]]; then
-    echo "%77"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%77" ]]; then
-    echo "node dist/cli/omx.js hud --watch"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%77" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%99" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%99" ]]; then
-    echo "0"
-    exit 0
-  fi
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        paneProbes: {
+          '%77': {
+            paneId: '%77',
+            startCommand: 'node dist/cli/omx.js hud --watch',
+            sessionName: 'devsess',
+          },
+          '%99': {
+            currentCommand: 'node',
+            currentPath: cwd,
+            startCommand: 'codex',
+            sessionName: 'devsess',
+            paneInMode: '0',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -602,6 +403,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -623,64 +425,20 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "list-panes" ]]; then
-  target=""
-  while (($#)); do
-    case "$1" in
-      -t) target="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$target" == "devsess" ]]; then
-    echo "%42 1"
-    exit 0
-  fi
-  echo "can't find session: $target" >&2
-  exit 1
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        listPaneTargets: {
+          devsess: ['%42 1'],
+        },
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentCommand: 'codex',
+            startCommand: 'codex',
+            currentPath: cwd,
+            sessionName: 'devsess',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -711,6 +469,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -732,64 +491,20 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "list-panes" ]]; then
-  target=""
-  while (($#)); do
-    case "$1" in
-      -t) target="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  if [[ "$target" == "devsess" ]]; then
-    echo "%42 1"
-    exit 0
-  fi
-  echo "can't find session: $target" >&2
-  exit 1
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%42" ]]; then
-    echo "/tmp/not-the-hook-cwd"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        listPaneTargets: {
+          devsess: ['%42 1'],
+        },
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentCommand: 'codex',
+            startCommand: 'codex',
+            currentPath: '/tmp/not-the-hook-cwd',
+            sessionName: 'devsess',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -816,6 +531,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -837,59 +553,22 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_id}" && "$target" == "%77" ]]; then
-    echo "%77"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%77" ]]; then
-    echo "node dist/cli/omx.js hud --watch"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%77" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_start_command}" && "$target" == "%99" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%99" ]]; then
-    echo "0"
-    exit 0
-  fi
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        paneProbes: {
+          '%77': {
+            paneId: '%77',
+            startCommand: 'node dist/cli/omx.js hud --watch',
+            sessionName: 'devsess',
+          },
+          '%99': {
+            currentCommand: 'node',
+            currentPath: cwd,
+            startCommand: 'codex',
+            sessionName: 'devsess',
+            paneInMode: '0',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -921,6 +600,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -946,45 +626,15 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%99" ]]; then
-    echo "%99"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "can't find session" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        paneProbes: {
+          '%99': {
+            paneId: '%99',
+            currentPath: cwd,
+            sessionName: 'devsess',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -1013,6 +663,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -1043,53 +694,17 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%99" ]]; then
-    echo "%99"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
-    echo "${cwd}"
-    exit 0
-  fi
-  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%99" ]]; then
-    echo "0"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  echo "can't find session" >&2
-  exit 1
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        paneProbes: {
+          '%99': {
+            paneId: '%99',
+            currentPath: cwd,
+            sessionName: 'devsess',
+            currentCommand: 'codex',
+            paneInMode: '0',
+          },
+        },
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 
@@ -1119,6 +734,7 @@ exit 1
       const sessionStateDir = join(stateDir, 'sessions', sessionId);
       const fakeBinDir = join(cwd, 'fake-bin');
       const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
       const configPath = join(omxDir, 'tmux-hook.json');
       const hookStatePath = join(stateDir, 'tmux-hook-state.json');
 
@@ -1140,49 +756,17 @@ exit 1
         log_level: 'debug',
       });
 
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
-  while (($#)); do
-    case "$1" in
-      -p) shift ;;
-      -t) target="$2"; shift 2 ;;
-      *) format="$1"; shift ;;
-    esac
-  done
-  if [[ "$format" == "#{pane_id}" && "$target" == "%42" ]]; then
-    echo "%42"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%42" ]]; then
-    echo "0"
-    exit 0
-  fi
-  echo "bad display target: $target / $format" >&2
-  exit 1
-fi
-if [[ "$cmd" == "capture-pane" ]]; then
-  cat <<'EOF'
-Working...
-• Running tests (3m 12s • esc to interrupt)
-EOF
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  echo "unexpected send-keys" >&2
-  exit 1
-fi
-echo "unsupported cmd: $cmd" >&2
-exit 1
-`;
+      const fakeTmux = buildFakeTmuxHealScript(tmuxLogPath, {
+        paneProbes: {
+          '%42': {
+            paneId: '%42',
+            currentCommand: 'codex',
+            paneInMode: '0',
+          },
+        },
+        captureOutput: 'Working...\n• Running tests (3m 12s • esc to interrupt)\n',
+        failSendKeys: true,
+      });
       await writeFile(fakeTmuxPath, fakeTmux);
       await chmod(fakeTmuxPath, 0o755);
 

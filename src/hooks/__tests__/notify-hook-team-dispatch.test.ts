@@ -16,7 +16,10 @@ import { pathToFileURL } from 'node:url';
 import { dirname } from 'node:path';
 import { buildFakeTmuxScript } from '../../test-support/shared-harness.js';
 
-function buildFakeTmux(tmuxLogPath: string): string {
+function buildFakeTmux(
+  tmuxLogPath: string,
+  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+): string {
   return buildFakeTmuxScript(tmuxLogPath, {
     listPaneLines: ['%42 1'],
     defaultProbe: {
@@ -26,6 +29,7 @@ function buildFakeTmux(tmuxLogPath: string): string {
       startCommand: 'codex',
       sessionName: 'session-test',
     },
+    ...options,
   });
 }
 
@@ -289,77 +293,22 @@ exit 1
     const prevTmuxPane = process.env.TMUX_PANE;
     try {
       await mkdir(fakeBinDir, { recursive: true });
-      const fakeTmux = `#!/usr/bin/env bash
-set -eu
-echo "$@" >> "${tmuxLogPath}"
-cmd="$1"
-shift || true
-if [[ "$cmd" == "capture-pane" ]]; then
-  printf "› ready\\n"
-  exit 0
-fi
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  fmt=""
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      -t)
-        shift
-        target="$1"
-        ;;
-      *)
-        fmt="$1"
-        ;;
-    esac
-    shift || true
-  done
-  if [[ "$fmt" == "#{pane_in_mode}" ]]; then
-    echo "0"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_id}" ]]; then
-    echo "\${target:-%42}"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_path}" ]]; then
-    dirname "${tmuxLogPath}"
-    exit 0
-  fi
-  if [[ "$fmt" == "#S" ]]; then
-    echo "devsess"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "node"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_start_command}" && "$target" == "%91" ]]; then
-    echo "node dist/cli/omx.js hud --watch"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_start_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  if [[ "$fmt" == "#{pane_current_command}" && "$target" == "%42" ]]; then
-    echo "codex"
-    exit 0
-  fi
-  exit 0
-fi
-if [[ "$cmd" == "send-keys" ]]; then
-  exit 0
-fi
-if [[ "$cmd" == "list-panes" ]]; then
-  printf "%%42\\t1\\tnode\\tcodex\\n%%91\\t0\\tnode\\tnode dist/cli/omx.js hud --watch\\n"
-  exit 0
-fi
-exit 0
-`;
+      const fakeTmux = buildFakeTmux(tmuxLogPath, {
+        paneProbes: {
+          '%42': {
+            currentCommand: 'codex',
+            startCommand: 'codex',
+          },
+          '%91': {
+            startCommand: 'node dist/cli/omx.js hud --watch',
+          },
+          '%99': {
+            currentCommand: 'codex',
+          },
+        },
+        captureOutput: '› ready\n',
+        listPaneLines: ['%42\t1\tnode\tcodex', '%91\t0\tnode\tnode dist/cli/omx.js hud --watch'],
+      });
       await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
       process.env.PATH = `${fakeBinDir}:${prevPath || ''}`;

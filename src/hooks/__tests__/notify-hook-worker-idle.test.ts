@@ -27,9 +27,12 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
-function buildFakeTmux(tmuxLogPath: string): string {
+type FakeTmuxOptions = Parameters<typeof buildFakeTmuxScript>[1];
+
+function buildFakeTmux(tmuxLogPath: string, options: FakeTmuxOptions = {}): string {
   return buildFakeTmuxScript(tmuxLogPath, {
-    listPaneLines: ['%1 12345'],
+    ...options,
+    listPaneLines: options.listPaneLines ?? ['%1 12345'],
   });
 }
 
@@ -164,8 +167,7 @@ describe('notify-hook per-worker idle notification', () => {
         updated_at: new Date(Date.now() - 5000).toISOString(),
       });
 
-      const fakeTmux = buildFakeTmuxScript(tmuxLogPath, {
-        listPaneLines: ['%1 12345'],
+      const fakeTmux = buildFakeTmux(tmuxLogPath, {
         paneProbes: {
           '%79': {
             currentCommand: 'zsh',

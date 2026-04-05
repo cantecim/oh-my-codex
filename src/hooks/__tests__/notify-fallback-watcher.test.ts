@@ -72,7 +72,7 @@ async function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number = 
 
 function buildFakeTmux(
   tmuxLogPath: string,
-  options: { failSendKeys?: boolean; failSendKeysMatch?: string; listPaneLines?: string[] } = {},
+  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
 ): string {
   const probePath = dirname(tmuxLogPath);
   return buildFakeTmuxScript(tmuxLogPath, {
@@ -84,11 +84,10 @@ function buildFakeTmux(
       startCommand: 'codex --model gpt-5',
       sessionName: 'session-test',
     },
+    ...options,
     listPaneLines: options.listPaneLines ?? ['%42 1'],
     sessionPaneLines: ['%42\tcodex\tcodex --model gpt-5'],
     allPaneLines: [`%42\t${probePath}\tcodex\tcodex --model gpt-5`],
-    failSendKeys: options.failSendKeys,
-    failSendKeysMatch: options.failSendKeysMatch,
   });
 }
 
