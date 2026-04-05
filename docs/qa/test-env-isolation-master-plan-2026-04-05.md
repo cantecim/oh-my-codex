@@ -395,6 +395,10 @@ Her pass sonunda:
 3. ilgili targeted suites
 4. kullanıcı ortamında normal full suite
 
+Program final acceptance'ta ayrıca:
+
+1. residual `withEnv` sweep kullanıcıya hatırlatılır, yapılana kadar uyarılır.
+
 Drift özel notu:
 
 - debug-open parity artık primary gate değildir

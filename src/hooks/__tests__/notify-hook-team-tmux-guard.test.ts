@@ -5,9 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  buildDebugChildEnv,
+  buildChildEnv,
   buildFakeTmuxScript,
-  buildIsolatedEnv,
 } from '../../test-support/shared-harness.js';
 
 function buildFakeTmux(
@@ -40,8 +39,7 @@ function runSendPaneInputInChild(params: {
   return spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: params.cwd,
     encoding: 'utf-8',
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(params.cwd),
+    env: buildChildEnv(params.cwd, {
       PATH: `${params.fakeBinDir}:${process.env.PATH ?? ''}`,
       TMUX: '',
       TMUX_PANE: '',

@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withEnv } from '../../test-support/shared-harness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = join(__dirname, '..', '..', '..', 'dist', 'scripts');
@@ -153,9 +154,7 @@ describe('notify-hook/operational-events – buildOperationalContext', () => {
   it('resolves a stable session_name from cwd + session id', async () => {
     const { buildOperationalContext } = await loadModule('notify-hook/operational-events.js');
     const sessionId = 'omx-issue-663-session';
-    const originalTmux = process.env.TMUX;
-    delete process.env.TMUX;
-    try {
+    await withEnv({ TMUX: undefined }, async () => {
       const context = buildOperationalContext({
         cwd: process.cwd(),
         normalizedEvent: 'pr-created',
@@ -167,10 +166,7 @@ describe('notify-hook/operational-events – buildOperationalContext', () => {
       assert.notEqual(context.session_name, sessionId);
       assert.match(context.session_name || '', /^omx-/);
       assert.match(context.session_name || '', /issue-663-session/);
-    } finally {
-      if (originalTmux === undefined) delete process.env.TMUX;
-      else process.env.TMUX = originalTmux;
-    }
+    });
   });
 });
 

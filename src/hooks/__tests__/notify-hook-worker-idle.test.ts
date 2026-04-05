@@ -6,9 +6,8 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  buildDebugChildEnv,
+  buildChildEnv,
   buildFakeTmuxScript,
-  buildIsolatedEnv,
 } from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
@@ -54,8 +53,7 @@ function runNotifyHookAsWorker(
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
     cwd,
     encoding: 'utf8',
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(cwd),
+    env: buildChildEnv(cwd, {
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_WORKER: workerEnv,
       OMX_TEAM_WORKER_IDLE_COOLDOWN_MS: '500',
@@ -624,14 +622,16 @@ describe('notify-hook per-worker idle notification', () => {
         'last-assistant-message': 'done',
       };
       const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
+        cwd,
         encoding: 'utf8',
-        env: {
-          ...process.env,
+        env: buildChildEnv(cwd, {
           PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
           OMX_TEAM_WORKER: '',
+          OMX_TEAM_STATE_ROOT: '',
+          OMX_TEAM_LEADER_CWD: '',
           TMUX: '',
           TMUX_PANE: '',
-        },
+        }),
       });
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 

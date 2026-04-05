@@ -9,9 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { initTeamState, enqueueDispatchRequest, readDispatchRequest } from '../../team/state.js';
 import { writeSessionStart } from '../session.js';
 import {
-  buildDebugChildEnv,
+  buildChildEnv,
   buildFakeTmuxScript,
-  buildIsolatedEnv,
 } from '../../test-support/shared-harness.js';
 
 async function appendLine(path: string, line: object): Promise<void> {
@@ -104,8 +103,7 @@ function buildCleanNotifyEnv(
     if (firstPathEntry.endsWith('/fake-bin')) return resolve(firstPathEntry, '..');
     return debugCwd;
   })();
-  return buildIsolatedEnv({
-    ...buildDebugChildEnv(inferredCwd),
+  return buildChildEnv(inferredCwd, {
     ...overrides,
   });
 }

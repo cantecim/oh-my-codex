@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildDebugChildEnv, buildIsolatedEnv } from '../../test-support/shared-harness.js';
+import { buildChildEnv } from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
@@ -47,8 +47,7 @@ function runWorkerNotify(
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
     cwd: payloadCwd,
     encoding: 'utf8',
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(payloadCwd),
+    env: buildChildEnv(payloadCwd, {
       ...inheritedEnv,
       ...extraEnv,
     }),

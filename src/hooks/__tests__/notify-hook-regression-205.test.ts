@@ -7,7 +7,7 @@
  * - notify-hook end-to-end keeps 'if you want' stall detection, but default injection now waits for a real stall window
  */
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -18,9 +18,9 @@ import { existsSync } from 'node:fs';
 import { writeSessionStart } from '../session.js';
 import { tmpdir } from 'node:os';
 import {
-  buildDebugChildEnv,
+  buildChildEnv,
   buildFakeTmuxScript,
-  buildIsolatedEnv,
+  withEnv,
 } from '../../test-support/shared-harness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -87,8 +87,7 @@ function runNotifyHook(
     cwd,
     encoding: 'utf8',
     timeout: 15_000,
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(cwd),
+    env: buildChildEnv(cwd, {
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
       OMX_SESSION_ID: 'sess-managed-regression',
@@ -162,25 +161,8 @@ describe('regression-205: detectStallPattern matches "if you want"', () => {
 // injection now waits for the stall window instead of firing immediately.
 // ---------------------------------------------------------------------------
 describe('regression-205: notify-hook records pending stall state on "if you want" by default', () => {
-  let originalTeamWorker: string | undefined;
-  let originalTeamStateRoot: string | undefined;
-
-  before(() => {
-    originalTeamWorker = process.env.OMX_TEAM_WORKER;
-    originalTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-    delete process.env.OMX_TEAM_WORKER;
-    delete process.env.OMX_TEAM_STATE_ROOT;
-  });
-
-  after(() => {
-    if (originalTeamWorker === undefined) delete process.env.OMX_TEAM_WORKER;
-    else process.env.OMX_TEAM_WORKER = originalTeamWorker;
-    if (originalTeamStateRoot === undefined) delete process.env.OMX_TEAM_STATE_ROOT;
-    else process.env.OMX_TEAM_STATE_ROOT = originalTeamStateRoot;
-  });
-
   it('records pending stall state instead of injecting immediately', async () => {
-    await withTempWorkingDir(async (cwd) => {
+    await withEnv({ OMX_TEAM_WORKER: undefined, OMX_TEAM_STATE_ROOT: undefined }, async () => withTempWorkingDir(async (cwd) => {
       const stateDir = join(cwd, '.omx', 'state');
       const logsDir = join(cwd, '.omx', 'logs');
       const codexHome = join(cwd, 'codex-home');
@@ -217,7 +199,7 @@ describe('regression-205: notify-hook records pending stall state on "if you wan
       assert.equal(nudgeState.nudgeCount, 0);
       assert.ok(nudgeState.pendingSignature, 'expected pending stall signature to be recorded');
       assert.ok(nudgeState.pendingSince, 'expected pending stall timestamp to be recorded');
-    });
+    }));
   });
 });
 
@@ -236,47 +218,24 @@ describe('regression-205: resolveTeamStateDirForWorker is exported from team-wor
 
   it('uses OMX_TEAM_STATE_ROOT env var when set', async () => {
     const { resolveTeamStateDirForWorker } = await loadModule('notify-hook/team-worker.js');
-    const saved = process.env.OMX_TEAM_STATE_ROOT;
-    process.env.OMX_TEAM_STATE_ROOT = '/custom/state/root';
-    try {
+    await withEnv({ OMX_TEAM_STATE_ROOT: '/custom/state/root' }, async () => {
       const result = await resolveTeamStateDirForWorker(
         '/some/cwd',
         { teamName: 'fix-ts', workerName: 'worker-1' },
       );
       assert.equal(result, '/custom/state/root');
-    } finally {
-      if (saved === undefined) {
-        delete process.env.OMX_TEAM_STATE_ROOT;
-      } else {
-        process.env.OMX_TEAM_STATE_ROOT = saved;
-      }
-    }
+    });
   });
 
   it('falls back to {cwd}/.omx/state when no env var and no team dir exists', async () => {
     const { resolveTeamStateDirForWorker } = await loadModule('notify-hook/team-worker.js');
-    const savedRoot = process.env.OMX_TEAM_STATE_ROOT;
-    const savedLeader = process.env.OMX_TEAM_LEADER_CWD;
-    delete process.env.OMX_TEAM_STATE_ROOT;
-    delete process.env.OMX_TEAM_LEADER_CWD;
-    try {
+    await withEnv({ OMX_TEAM_STATE_ROOT: undefined, OMX_TEAM_LEADER_CWD: undefined }, async () => {
       const cwd = '/nonexistent/cwd-that-has-no-team-dir';
       const result = await resolveTeamStateDirForWorker(
         cwd,
         { teamName: 'fix-ts', workerName: 'worker-1' },
       );
       assert.equal(result, join(cwd, '.omx', 'state'));
-    } finally {
-      if (savedRoot === undefined) {
-        delete process.env.OMX_TEAM_STATE_ROOT;
-      } else {
-        process.env.OMX_TEAM_STATE_ROOT = savedRoot;
-      }
-      if (savedLeader === undefined) {
-        delete process.env.OMX_TEAM_LEADER_CWD;
-      } else {
-        process.env.OMX_TEAM_LEADER_CWD = savedLeader;
-      }
-    }
+    });
   });
 });

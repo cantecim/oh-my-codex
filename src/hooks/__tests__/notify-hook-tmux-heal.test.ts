@@ -6,8 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildFakeTmuxScript,
-  buildDebugChildEnv,
-  buildIsolatedEnv,
+  buildChildEnv,
   readJson,
   withTempDir,
   writeTestArtifactManifest,
@@ -38,8 +37,7 @@ function runTmuxHealNotifyHook(
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
     cwd,
     encoding: 'utf8',
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(cwd),
+    env: buildChildEnv(cwd, {
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_WORKER: '',
       ...extraEnv,

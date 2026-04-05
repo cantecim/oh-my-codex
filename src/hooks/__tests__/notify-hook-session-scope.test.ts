@@ -6,7 +6,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
 import { VISUAL_NEXT_ACTIONS_LIMIT } from '../../visual/constants.js';
-import { buildDebugChildEnv, buildIsolatedEnv } from '../../test-support/shared-harness.js';
+import { buildChildEnv } from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
 
@@ -18,8 +18,7 @@ function runSessionScopedNotifyHook(
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
     cwd,
     encoding: 'utf-8',
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(cwd),
+    env: buildChildEnv(cwd, {
       OMX_TEAM_WORKER: '',
       TMUX: '',
       TMUX_PANE: '',

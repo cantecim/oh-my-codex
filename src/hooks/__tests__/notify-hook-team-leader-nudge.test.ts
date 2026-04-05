@@ -7,9 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initTeamState, enqueueDispatchRequest, readDispatchRequest } from '../../team/state.js';
 import {
-  buildDebugChildEnv,
+  buildChildEnv,
   buildFakeTmuxScript,
-  buildIsolatedEnv,
   readJson,
   withTempDir,
   writeJson,
@@ -57,8 +56,7 @@ function runNotifyHook(
     encoding: 'utf8',
     cwd,
     env: {
-      ...buildIsolatedEnv({
-      ...buildDebugChildEnv(cwd),
+      ...buildChildEnv(cwd, {
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_LEADER_NUDGE_MS: '10000',
       OMX_TEAM_LEADER_STALE_MS: '10000',

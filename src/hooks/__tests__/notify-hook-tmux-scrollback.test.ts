@@ -14,9 +14,8 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  buildDebugChildEnv,
+  buildChildEnv,
   buildFakeTmuxScript,
-  buildIsolatedEnv,
 } from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
@@ -105,8 +104,7 @@ function runNotifyHook(cwd: string, fakeBinDir: string, threadId: string) {
   return spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
     cwd,
     encoding: 'utf8',
-    env: buildIsolatedEnv({
-      ...buildDebugChildEnv(cwd),
+    env: buildChildEnv(cwd, {
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       OMX_TEAM_WORKER: '',
       TMUX_PANE: '%42',

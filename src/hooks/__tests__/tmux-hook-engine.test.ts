@@ -16,6 +16,7 @@ import {
   isPaneRunningShell,
   resolveCodexPane,
 } from '../../scripts/tmux-hook-engine.js';
+import { withEnv } from '../../test-support/shared-harness.js';
 
 describe('normalizeTmuxHookConfig', () => {
   it('returns safe disabled defaults for missing config', () => {
@@ -401,8 +402,6 @@ describe('resolveCodexPane', () => {
 
     const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-resolve-codex-pane-'));
     const fakeTmuxPath = join(fakeBinDir, 'tmux');
-    const previousPath = process.env.PATH;
-    const previousTmuxPane = process.env.TMUX_PANE;
 
     try {
       await writeFile(fakeTmuxPath, `#!/usr/bin/env bash
@@ -442,15 +441,13 @@ echo "unsupported" >&2
 exit 1
 `);
       await chmod(fakeTmuxPath, 0o755);
-      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
-      process.env.TMUX_PANE = '%2';
-
-      assert.equal(resolveCodexPane(), '%42');
+      await withEnv({
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        TMUX_PANE: '%2',
+      }, async () => {
+        assert.equal(resolveCodexPane(), '%42');
+      });
     } finally {
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      if (typeof previousTmuxPane === 'string') process.env.TMUX_PANE = previousTmuxPane;
-      else delete process.env.TMUX_PANE;
       await rm(fakeBinDir, { recursive: true, force: true });
     }
   });

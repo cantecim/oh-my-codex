@@ -1,4 +1,4 @@
-import { after, before, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,7 @@ import {
 } from '../../team/state.js';
 import { pathToFileURL } from 'node:url';
 import { dirname } from 'node:path';
-import { buildFakeTmuxScript } from '../../test-support/shared-harness.js';
+import { buildFakeTmuxScript, withEnv } from '../../test-support/shared-harness.js';
 
 function buildFakeTmux(
   tmuxLogPath: string,
@@ -33,30 +33,39 @@ function buildFakeTmux(
   });
 }
 
+const DISPATCH_MODULE_URL = pathToFileURL(new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname).href;
+
+async function loadDispatchModule() {
+  return import(DISPATCH_MODULE_URL);
+}
+
+async function withDispatchEnv<T>(
+  run: () => Promise<T>,
+  overrides: Record<string, string | undefined> = {},
+): Promise<T> {
+  // Temporary same-process fallback for module-oriented tests.
+  return withEnv({
+    OMX_TEAM_WORKER: undefined,
+    OMX_TEAM_STATE_ROOT: undefined,
+    OMX_TEAM_LEADER_CWD: undefined,
+    OMX_MODEL_INSTRUCTIONS_FILE: undefined,
+    TMUX: undefined,
+    TMUX_PANE: undefined,
+    ...overrides,
+  }, run);
+}
+
+function dispatchCase(
+  name: string,
+  run: () => Promise<void>,
+) {
+  it(name, async () => {
+    await withDispatchEnv(run);
+  });
+}
+
 describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
-  const originalTeamWorker = process.env.OMX_TEAM_WORKER;
-  const originalTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
-
-  before(() => {
-    delete process.env.OMX_TEAM_WORKER;
-    delete process.env.OMX_TEAM_STATE_ROOT;
-  });
-
-  after(() => {
-    if (originalTeamWorker === undefined) {
-      delete process.env.OMX_TEAM_WORKER;
-    } else {
-      process.env.OMX_TEAM_WORKER = originalTeamWorker;
-    }
-
-    if (originalTeamStateRoot === undefined) {
-      delete process.env.OMX_TEAM_STATE_ROOT;
-    } else {
-      process.env.OMX_TEAM_STATE_ROOT = originalTeamStateRoot;
-    }
-  });
-
-  it('marks pending request as notified and preserves mailbox notified_at semantics', async () => {
+  dispatchCase('marks pending request as notified and preserves mailbox notified_at semantics', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -69,8 +78,7 @@ describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
         trigger_message: 'check mailbox',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       const result = await mod.drainPendingTeamDispatch({
         cwd,
         maxPerTick: 5,
@@ -86,7 +94,7 @@ describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
     }
   });
 
-  it('leader-fixed dispatch remains pending with leader_pane_missing_deferred when pane missing', async () => {
+  dispatchCase('leader-fixed dispatch remains pending with leader_pane_missing_deferred when pane missing', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -98,8 +106,7 @@ describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
         trigger_message: 'check leader mailbox',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       const result = await mod.drainPendingTeamDispatch({
         cwd,
         maxPerTick: 5,
@@ -151,7 +158,7 @@ describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
     }
   });
 
-  it('does not duplicate deferred leader artifacts across repeated drain ticks', async () => {
+  dispatchCase('does not duplicate deferred leader artifacts across repeated drain ticks', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -163,8 +170,7 @@ describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
         trigger_message: 'check leader mailbox',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector: async () => ({ ok: true, reason: 'injected_for_test' }) });
       await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector: async () => ({ ok: true, reason: 'injected_for_test' }) });
 
@@ -184,12 +190,10 @@ describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
     }
   });
 
-  it('invokes omx-runtime exec via shared bridge fallback', async () => {
+  dispatchCase('invokes omx-runtime exec via shared bridge fallback', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const runtimeLogPath = join(cwd, 'runtime.log');
-    const previousPath = process.env.PATH;
-    const previousRuntimeBinary = process.env.OMX_RUNTIME_BINARY;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       await writeFile(
@@ -209,88 +213,81 @@ exit 1
 `,
       );
       await chmod(join(fakeBinDir, 'omx-runtime'), 0o755);
-      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
-      process.env.OMX_RUNTIME_BINARY = join(fakeBinDir, 'omx-runtime');
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const queued = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          pane_id: '%42',
+          trigger_message: 'ping',
+        }, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const queued = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        pane_id: '%42',
-        trigger_message: 'ping',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        await mod.drainPendingTeamDispatch({
+          cwd,
+          maxPerTick: 5,
+          injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+        });
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      await mod.drainPendingTeamDispatch({
-        cwd,
-        maxPerTick: 5,
-        injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+        const runtimeLog = await readFile(runtimeLogPath, 'utf8');
+        assert.match(runtimeLog, /^exec \{"command":"MarkNotified"/m);
+
+        const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+        assert.equal(request?.status, 'notified');
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        OMX_RUNTIME_BINARY: join(fakeBinDir, 'omx-runtime'),
       });
-
-      const runtimeLog = await readFile(runtimeLogPath, 'utf8');
-      assert.match(runtimeLog, /^exec \{"command":"MarkNotified"/m);
-
-      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'notified');
     } finally {
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      if (typeof previousRuntimeBinary === 'string') process.env.OMX_RUNTIME_BINARY = previousRuntimeBinary;
-      else delete process.env.OMX_RUNTIME_BINARY;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('leader-fixed dispatch uses pane target only when leader_pane_id exists', async () => {
+  dispatchCase('leader-fixed dispatch uses pane target only when leader_pane_id exists', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
-    const prevPath = process.env.PATH;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
-      process.env.PATH = `${fakeBinDir}:${prevPath || ''}`;
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const cfg = await readTeamConfig('alpha', cwd);
+        assert.ok(cfg);
+        if (!cfg) throw new Error('missing team config');
+        cfg.leader_pane_id = '%99';
+        await saveTeamConfig(cfg, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const cfg = await readTeamConfig('alpha', cwd);
-      assert.ok(cfg);
-      if (!cfg) throw new Error('missing team config');
-      cfg.leader_pane_id = '%99';
-      await saveTeamConfig(cfg, cwd);
+        const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
+        await enqueueDispatchRequest('alpha', {
+          kind: 'mailbox',
+          to_worker: 'leader-fixed',
+          message_id: msg.message_id,
+          trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Review it and decide the next concrete step.',
+        }, cwd);
 
-      const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
-      await enqueueDispatchRequest('alpha', {
-        kind: 'mailbox',
-        to_worker: 'leader-fixed',
-        message_id: msg.message_id,
-        trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Review it and decide the next concrete step.',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        assert.equal(result.processed, 1);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      assert.equal(result.processed, 1);
-
-      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      assert.match(tmuxLog, /send-keys -t %99/);
-      assert.match(tmuxLog, /mailbox\/leader-fixed\.json; worker-1 sent a new message/);
-      assert.doesNotMatch(tmuxLog, /send-keys -t .*devsess/);
+        const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+        assert.match(tmuxLog, /send-keys -t %99/);
+        assert.match(tmuxLog, /mailbox\/leader-fixed\.json; worker-1 sent a new message/);
+        assert.doesNotMatch(tmuxLog, /send-keys -t .*devsess/);
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+      });
     } finally {
-      if (typeof prevPath === 'string') process.env.PATH = prevPath;
-      else delete process.env.PATH;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('leader-fixed dispatch prefers the canonical codex pane over a stale HUD leader pane id', async () => {
+  dispatchCase('leader-fixed dispatch prefers the canonical codex pane over a stale HUD leader pane id', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
-    const prevPath = process.env.PATH;
-    const prevTmuxPane = process.env.TMUX_PANE;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       const fakeTmux = buildFakeTmux(tmuxLogPath, {
@@ -311,79 +308,75 @@ exit 1
       });
       await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
-      process.env.PATH = `${fakeBinDir}:${prevPath || ''}`;
-      process.env.TMUX_PANE = '%42';
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const cfg = await readTeamConfig('alpha', cwd);
+        assert.ok(cfg);
+        if (!cfg) throw new Error('missing team config');
+        cfg.leader_pane_id = '%91';
+        await saveTeamConfig(cfg, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const cfg = await readTeamConfig('alpha', cwd);
-      assert.ok(cfg);
-      if (!cfg) throw new Error('missing team config');
-      cfg.leader_pane_id = '%91';
-      await saveTeamConfig(cfg, cwd);
+        const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
+        await enqueueDispatchRequest('alpha', {
+          kind: 'mailbox',
+          to_worker: 'leader-fixed',
+          message_id: msg.message_id,
+          trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Review it and decide the next concrete step.',
+        }, cwd);
 
-      const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
-      await enqueueDispatchRequest('alpha', {
-        kind: 'mailbox',
-        to_worker: 'leader-fixed',
-        message_id: msg.message_id,
-        trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Review it and decide the next concrete step.',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        assert.equal(result.processed, 1);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      assert.equal(result.processed, 1);
-
-      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      assert.match(tmuxLog, /send-keys -t %42/);
-      assert.doesNotMatch(tmuxLog, /send-keys -t %91/);
+        const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+        assert.match(tmuxLog, /send-keys -t %42/);
+        assert.doesNotMatch(tmuxLog, /send-keys -t %91/);
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        TMUX_PANE: '%42',
+      });
     } finally {
-      if (typeof prevPath === 'string') process.env.PATH = prevPath;
-      else delete process.env.PATH;
-      if (typeof prevTmuxPane === 'string') process.env.TMUX_PANE = prevTmuxPane;
-      else delete process.env.TMUX_PANE;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('uses explicit stateDir when marking mailbox notified_at', async () => {
+  dispatchCase('uses explicit stateDir when marking mailbox notified_at', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const stateDir = join(cwd, 'custom-state-root');
-    const previousStateRoot = process.env.OMX_TEAM_STATE_ROOT;
     try {
-      process.env.OMX_TEAM_STATE_ROOT = './custom-state-root';
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const msg = await sendDirectMessage('alpha', 'worker-1', 'worker-1', 'hello', cwd);
-      const queued = await enqueueDispatchRequest('alpha', {
-        kind: 'mailbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        message_id: msg.message_id,
-        trigger_message: 'check mailbox',
-      }, cwd);
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const msg = await sendDirectMessage('alpha', 'worker-1', 'worker-1', 'hello', cwd);
+        const queued = await enqueueDispatchRequest('alpha', {
+          kind: 'mailbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          message_id: msg.message_id,
+          trigger_message: 'check mailbox',
+        }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const result = await mod.drainPendingTeamDispatch({
-        cwd,
-        stateDir,
-        maxPerTick: 5,
-        injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+        const mod = await loadDispatchModule();
+        const result = await mod.drainPendingTeamDispatch({
+          cwd,
+          stateDir,
+          maxPerTick: 5,
+          injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+        });
+
+        assert.equal(result.processed, 1);
+        const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+        assert.equal(request?.status, 'notified');
+        const mailbox = await listMailboxMessages('alpha', 'worker-1', cwd);
+        assert.ok(mailbox[0]?.notified_at);
+      }, {
+        OMX_TEAM_STATE_ROOT: './custom-state-root',
       });
-
-      assert.equal(result.processed, 1);
-      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'notified');
-      const mailbox = await listMailboxMessages('alpha', 'worker-1', cwd);
-      assert.ok(mailbox[0]?.notified_at);
     } finally {
-      if (typeof previousStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousStateRoot;
-      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('is idempotent across repeated ticks (no duplicate processing)', async () => {
+  dispatchCase('is idempotent across repeated ticks (no duplicate processing)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -394,8 +387,7 @@ exit 1
         trigger_message: 'ping',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       await mod.drainPendingTeamDispatch({
         cwd,
         maxPerTick: 5,
@@ -414,7 +406,7 @@ exit 1
     }
   });
 
-  it('leaves unconfirmed injection as pending for retry (#391)', async () => {
+  dispatchCase('leaves unconfirmed injection as pending for retry (#391)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -425,8 +417,7 @@ exit 1
         trigger_message: 'ping',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       // First tick: injector returns unconfirmed → should stay pending
       const result = await mod.drainPendingTeamDispatch({
         cwd,
@@ -443,7 +434,7 @@ exit 1
     }
   });
 
-  it('marks unconfirmed as failed after max attempts (#391)', async () => {
+  dispatchCase('marks unconfirmed as failed after max attempts (#391)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -454,8 +445,7 @@ exit 1
         trigger_message: 'ping',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       const injector = async () => ({ ok: true, reason: 'tmux_send_keys_unconfirmed' });
       // Drain 3 times to exhaust max attempts (MAX_UNCONFIRMED_ATTEMPTS=3)
       await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
@@ -471,7 +461,7 @@ exit 1
     }
   });
 
-  it('confirmed injection marks notified immediately (#391)', async () => {
+  dispatchCase('confirmed injection marks notified immediately (#391)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -482,8 +472,7 @@ exit 1
         trigger_message: 'ping',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       const result = await mod.drainPendingTeamDispatch({
         cwd,
         maxPerTick: 5,
@@ -495,7 +484,7 @@ exit 1
     }
   });
 
-  it('keeps retry_pending derived-only and does not persist transient tags', async () => {
+  dispatchCase('keeps retry_pending derived-only and does not persist transient tags', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -506,8 +495,7 @@ exit 1
         trigger_message: 'ping',
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       await mod.drainPendingTeamDispatch({
         cwd,
         maxPerTick: 5,
@@ -531,60 +519,56 @@ exit 1
     }
   });
 
-  it('retries submit with isolated C-m and does not retype when trigger already present', async () => {
+  dispatchCase('retries submit with isolated C-m and does not retype when trigger already present', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     const captureFile = join(cwd, 'capture.txt');
-    const previousPath = process.env.PATH;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
       await writeFile(captureFile, '... ping ...');
-      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
-      process.env.OMX_TEST_CAPTURE_FILE = captureFile;
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const queued = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          pane_id: '%42',
+          trigger_message: 'ping',
+        }, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const queued = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        pane_id: '%42',
-        trigger_message: 'ping',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+        const typeMatches = tmuxLog.match(/send-keys -t %42 -l ping/g) || [];
+        assert.equal(typeMatches.length, 1, 'fresh attempt should type once; retries with draft should be submit-only');
+        const cmMatches = tmuxLog.match(/send-keys -t %42 C-m/g) || [];
+        assert.ok(cmMatches.length > 0, 'submit should use C-m');
+        assert.ok(!/send-keys[^\n]*-l[^\n]*C-m/.test(tmuxLog), 'must not mix -l payload with C-m submit');
 
-      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      const typeMatches = tmuxLog.match(/send-keys -t %42 -l ping/g) || [];
-      assert.equal(typeMatches.length, 1, 'fresh attempt should type once; retries with draft should be submit-only');
-      const cmMatches = tmuxLog.match(/send-keys -t %42 C-m/g) || [];
-      assert.ok(cmMatches.length > 0, 'submit should use C-m');
-      assert.ok(!/send-keys[^\n]*-l[^\n]*C-m/.test(tmuxLog), 'must not mix -l payload with C-m submit');
-
-      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'pending');
-      assert.equal(request?.attempt_count, 2);
-      assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
+        const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+        assert.equal(request?.status, 'pending');
+        assert.equal(request?.attempt_count, 2);
+        assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        OMX_TEST_CAPTURE_FILE: captureFile,
+      });
     } finally {
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      delete process.env.OMX_TEST_CAPTURE_FILE;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('retypes on every retry when trigger is not in narrow input area', async () => {
+  dispatchCase('retypes on every retry when trigger is not in narrow input area', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     const captureSeqFile = join(cwd, 'capture-seq.txt');
     const captureCounterFile = join(cwd, 'capture-seq.idx');
-    const previousPath = process.env.PATH;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -600,49 +584,44 @@ exit 1
         // tick3: 1 shared preflight + 1 pre-capture + 3 verify rounds × 2 captures = 8
         'ready', 'ready', 'ping', 'ping', 'ping', 'ping', 'ping', 'ping',
       ].join('\n'));
-      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
-      process.env.OMX_TEST_CAPTURE_SEQUENCE_FILE = captureSeqFile;
-      process.env.OMX_TEST_CAPTURE_COUNTER_FILE = captureCounterFile;
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const queued = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          pane_id: '%42',
+          trigger_message: 'ping',
+        }, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const queued = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        pane_id: '%42',
-        trigger_message: 'ping',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+        const typeMatches = tmuxLog.match(/send-keys -t %42 -l ping/g) || [];
+        assert.equal(typeMatches.length, 3, 'should retype on every retry when trigger not in narrow capture (fresh + 2 retries)');
 
-      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      const typeMatches = tmuxLog.match(/send-keys -t %42 -l ping/g) || [];
-      // With narrow capture, retypes on every retry when trigger is not in input area
-      assert.equal(typeMatches.length, 3, 'should retype on every retry when trigger not in narrow capture (fresh + 2 retries)');
-
-      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'failed');
-      assert.equal(request?.last_reason, 'unconfirmed_after_max_retries');
+        const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+        assert.equal(request?.status, 'failed');
+        assert.equal(request?.last_reason, 'unconfirmed_after_max_retries');
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        OMX_TEST_CAPTURE_SEQUENCE_FILE: captureSeqFile,
+        OMX_TEST_CAPTURE_COUNTER_FILE: captureCounterFile,
+      });
     } finally {
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      delete process.env.OMX_TEST_CAPTURE_SEQUENCE_FILE;
-      delete process.env.OMX_TEST_CAPTURE_COUNTER_FILE;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('does not confirm when narrow misses but wide tail still has unsent trigger', async () => {
+  dispatchCase('does not confirm when narrow misses but wide tail still has unsent trigger', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     const captureSeqFile = join(cwd, 'capture-seq.txt');
     const captureCounterFile = join(cwd, 'capture-seq.idx');
-    const previousPath = process.env.PATH;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -655,44 +634,40 @@ exit 1
         '   ', 'ping',
         '   ', 'ping',
       ].join('\n'));
-      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
-      process.env.OMX_TEST_CAPTURE_SEQUENCE_FILE = captureSeqFile;
-      process.env.OMX_TEST_CAPTURE_COUNTER_FILE = captureCounterFile;
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const queued = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          pane_id: '%42',
+          trigger_message: 'ping',
+        }, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const queued = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        pane_id: '%42',
-        trigger_message: 'ping',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        assert.equal(result.processed, 0, 'must not mark notified when wide tail still shows trigger');
+        assert.ok(result.skipped >= 1);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      assert.equal(result.processed, 0, 'must not mark notified when wide tail still shows trigger');
-      assert.ok(result.skipped >= 1);
-
-      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'pending');
-      assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
+        const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+        assert.equal(request?.status, 'pending');
+        assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        OMX_TEST_CAPTURE_SEQUENCE_FILE: captureSeqFile,
+        OMX_TEST_CAPTURE_COUNTER_FILE: captureCounterFile,
+      });
     } finally {
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      delete process.env.OMX_TEST_CAPTURE_SEQUENCE_FILE;
-      delete process.env.OMX_TEST_CAPTURE_COUNTER_FILE;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('does not confirm while pane is still bootstrapping even when trigger is absent', async () => {
+  dispatchCase('does not confirm while pane is still bootstrapping even when trigger is absent', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     const captureSeqFile = join(cwd, 'capture-seq.txt');
     const captureCounterFile = join(cwd, 'capture-seq.idx');
-    const previousPath = process.env.PATH;
     try {
       await mkdir(fakeBinDir, { recursive: true });
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -703,128 +678,123 @@ exit 1
         '   ', 'model: loading',
         '   ', 'model: loading',
       ].join('\n'));
-      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
-      process.env.OMX_TEST_CAPTURE_SEQUENCE_FILE = captureSeqFile;
-      process.env.OMX_TEST_CAPTURE_COUNTER_FILE = captureCounterFile;
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const queued = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          pane_id: '%42',
+          trigger_message: 'ping',
+        }, cwd);
 
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const queued = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        pane_id: '%42',
-        trigger_message: 'ping',
-      }, cwd);
+        const mod = await loadDispatchModule();
+        const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+        assert.equal(result.processed, 0);
+        assert.ok(result.skipped >= 1);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
-      assert.equal(result.processed, 0);
-      assert.ok(result.skipped >= 1);
-
-      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
-      assert.equal(request?.status, 'pending');
-      assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
-    } finally {
-      if (typeof previousPath === 'string') process.env.PATH = previousPath;
-      else delete process.env.PATH;
-      delete process.env.OMX_TEST_CAPTURE_SEQUENCE_FILE;
-      delete process.env.OMX_TEST_CAPTURE_COUNTER_FILE;
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it('applies per-issue cooldown to avoid repeated reinjection in one drain tick', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
-    const previousIssueCooldown = process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
-    try {
-      process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = '900000';
-      await initTeamState('alpha', 'task', 'executor', 2, cwd);
-      const first = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        trigger_message: '› IND-123 only...',
-      }, cwd);
-      const second = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-2',
-        worker_index: 2,
-        trigger_message: 'IND-123 only...',
-      }, cwd);
-
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const result = await mod.drainPendingTeamDispatch({
-        cwd,
-        maxPerTick: 5,
-        injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+        const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+        assert.equal(request?.status, 'pending');
+        assert.equal(request?.last_reason, 'tmux_send_keys_unconfirmed');
+      }, {
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        OMX_TEST_CAPTURE_SEQUENCE_FILE: captureSeqFile,
+        OMX_TEST_CAPTURE_COUNTER_FILE: captureCounterFile,
       });
-      assert.equal(result.processed, 1);
-      assert.ok(result.skipped >= 1);
-
-      const firstReq = await readDispatchRequest('alpha', first.request.request_id, cwd);
-      const secondReq = await readDispatchRequest('alpha', second.request.request_id, cwd);
-      assert.equal(firstReq?.status, 'notified');
-      assert.equal(secondReq?.status, 'pending');
-      assert.equal(secondReq?.attempt_count, 0);
     } finally {
-      if (typeof previousIssueCooldown === 'string') process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = previousIssueCooldown;
-      else delete process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('skips repeated same-issue reinjection during per-issue cooldown window', async () => {
+  dispatchCase('applies per-issue cooldown to avoid repeated reinjection in one drain tick', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
-    const previousCooldown = process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
+    try {
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 2, cwd);
+        const first = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          trigger_message: '› IND-123 only...',
+        }, cwd);
+        const second = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-2',
+          worker_index: 2,
+          trigger_message: 'IND-123 only...',
+        }, cwd);
+
+        const mod = await loadDispatchModule();
+        const result = await mod.drainPendingTeamDispatch({
+          cwd,
+          maxPerTick: 5,
+          injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+        });
+        assert.equal(result.processed, 1);
+        assert.ok(result.skipped >= 1);
+
+        const firstReq = await readDispatchRequest('alpha', first.request.request_id, cwd);
+        const secondReq = await readDispatchRequest('alpha', second.request.request_id, cwd);
+        assert.equal(firstReq?.status, 'notified');
+        assert.equal(secondReq?.status, 'pending');
+        assert.equal(secondReq?.attempt_count, 0);
+      }, {
+        OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS: '900000',
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  dispatchCase('skips repeated same-issue reinjection during per-issue cooldown window', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     let injectCount = 0;
     try {
-      process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = '900000';
-      await initTeamState('alpha', 'task', 'executor', 1, cwd);
-      const first = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        trigger_message: 'IND-123 only...',
-      }, cwd);
-      const second = await enqueueDispatchRequest('alpha', {
-        kind: 'inbox',
-        to_worker: 'worker-1',
-        worker_index: 1,
-        trigger_message: 'IND-123 only: retry',
-      }, cwd);
+      await withDispatchEnv(async () => {
+        await initTeamState('alpha', 'task', 'executor', 1, cwd);
+        const first = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          trigger_message: 'IND-123 only...',
+        }, cwd);
+        const second = await enqueueDispatchRequest('alpha', {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          trigger_message: 'IND-123 only: retry',
+        }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
-      const injector = async () => {
-        injectCount += 1;
-        return { ok: true, reason: 'tmux_send_keys_unconfirmed' };
-      };
+        const mod = await loadDispatchModule();
+        const injector = async () => {
+          injectCount += 1;
+          return { ok: true, reason: 'tmux_send_keys_unconfirmed' };
+        };
 
-      const firstTick = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
-      const secondTick = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
+        const firstTick = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
+        const secondTick = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
 
-      assert.equal(firstTick.processed, 0);
-      assert.ok(firstTick.skipped >= 1);
-      assert.equal(secondTick.processed, 0);
-      assert.ok(secondTick.skipped >= 2);
-      assert.equal(injectCount, 1, 'same issue should not be reinjected while cooldown is active');
+        assert.equal(firstTick.processed, 0);
+        assert.ok(firstTick.skipped >= 1);
+        assert.equal(secondTick.processed, 0);
+        assert.ok(secondTick.skipped >= 2);
+        assert.equal(injectCount, 1, 'same issue should not be reinjected while cooldown is active');
 
-      const firstRequest = await readDispatchRequest('alpha', first.request.request_id, cwd);
-      const secondRequest = await readDispatchRequest('alpha', second.request.request_id, cwd);
-      assert.equal(firstRequest?.status, 'pending');
-      assert.equal(firstRequest?.attempt_count, 1);
-      assert.equal(secondRequest?.status, 'pending');
-      assert.equal(secondRequest?.attempt_count, 0, 'cooldown-blocked request should remain untouched');
+        const firstRequest = await readDispatchRequest('alpha', first.request.request_id, cwd);
+        const secondRequest = await readDispatchRequest('alpha', second.request.request_id, cwd);
+        assert.equal(firstRequest?.status, 'pending');
+        assert.equal(firstRequest?.attempt_count, 1);
+        assert.equal(secondRequest?.status, 'pending');
+        assert.equal(secondRequest?.attempt_count, 0, 'cooldown-blocked request should remain untouched');
+      }, {
+        OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS: '900000',
+      });
     } finally {
-      if (typeof previousCooldown === 'string') process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = previousCooldown;
-      else delete process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('skips non-hook transport preferences in hook consumer', async () => {
+  dispatchCase('skips non-hook transport preferences in hook consumer', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
       await initTeamState('alpha', 'task', 'executor', 1, cwd);
@@ -837,8 +807,7 @@ exit 1
         fallback_allowed: false,
       }, cwd);
 
-      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
-      const mod = await import(pathToFileURL(modulePath).href);
+      const mod = await loadDispatchModule();
       const result = await mod.drainPendingTeamDispatch({
         cwd,
         maxPerTick: 5,
