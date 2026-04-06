@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { runAutopilotSkillRuntimeBridge } from '../autopilot-runtime-bridge.js';
 import { recordStoryCompletion } from '../../integrations/bmad/writeback.js';
 import { buildBmadFixtureRefs, createBmadProject } from '../../test-support/bmad-fixture.js';
+import { getBmadArtifactIndexPath, getBmadStatePath } from '../../state/paths.js';
 import { persistBmadActiveSelection, reconcileBmadIntegrationState } from '../../integrations/bmad/reconcile.js';
 
 describe('autopilot skill/runtime bridge', () => {
@@ -73,6 +74,10 @@ describe('autopilot skill/runtime bridge', () => {
       assert.equal(result.status, 'completed');
       assert.equal('kind' in result ? result.kind : undefined, 'bmad-campaign');
       assert.deepEqual('completedStoryPaths' in result ? result.completedStoryPaths : [], [storyPath]);
+      const canonicalState = JSON.parse(await readFile(getBmadStatePath(root), 'utf-8')) as { phase?: string; activeStoryRef?: string | null };
+      const artifactIndex = JSON.parse(await readFile(getBmadArtifactIndexPath(root), 'utf-8')) as { outputRoot?: string | null };
+      assert.equal(canonicalState.phase, 'implementation');
+      assert.equal(artifactIndex.outputRoot, refs.outputRoot);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -107,6 +112,10 @@ describe('autopilot skill/runtime bridge', () => {
 
         assert.equal(result.status, 'completed');
         assert.deepEqual('completedStoryPaths' in result ? result.completedStoryPaths : [], [storyPath]);
+        const canonicalState = JSON.parse(await readFile(getBmadStatePath(root), 'utf-8')) as { phase?: string; activeStoryRef?: string | null };
+        const artifactIndex = JSON.parse(await readFile(getBmadArtifactIndexPath(root), 'utf-8')) as { outputRoot?: string | null };
+        assert.equal(canonicalState.phase, 'implementation');
+        assert.equal(artifactIndex.outputRoot, outputRoot);
         const hookContent = await readFile(join(root, outputRoot, 'implementation-artifacts', 'omx-story-hook-story-login.md'), 'utf-8');
         assert.match(hookContent, /# OMX Implementation Summary/);
       } finally {
@@ -151,8 +160,10 @@ describe('autopilot skill/runtime bridge', () => {
       assert.equal('stopReason' in result ? result.stopReason : undefined, 'ambiguous_active_story');
 
       const rawState = JSON.parse(await readFile(join(root, '.omx', 'state', 'autopilot-state.json'), 'utf-8')) as Record<string, unknown>;
+      const canonicalState = JSON.parse(await readFile(getBmadStatePath(root), 'utf-8')) as { phase?: string; activeStoryRef?: string | null };
       assert.equal(rawState.current_phase, 'blocked');
       assert.equal(rawState.bmad_context_blocked_by_ambiguity, true);
+      assert.equal(canonicalState.phase, 'implementation');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

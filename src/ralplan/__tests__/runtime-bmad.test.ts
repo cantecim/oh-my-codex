@@ -1,9 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readModeState } from '../../modes/base.js';
+import { getBmadArtifactIndexPath, getBmadStatePath } from '../../state/paths.js';
 import { runRalplanConsensus } from '../runtime.js';
 
 describe('ralplan runtime BMAD contract', () => {
@@ -43,6 +44,11 @@ describe('ralplan runtime BMAD contract', () => {
       assert.equal(finalState?.bmad_detected, true);
       assert.equal(finalState?.bmad_ready_for_execution, true);
       assert.equal(finalState?.bmad_active_story_path, '_bmad-output/planning-artifacts/epics/story-login.md');
+      const canonicalState = JSON.parse(await readFile(getBmadStatePath(cwd), 'utf-8')) as { phase?: string; activeStoryRef?: string | null };
+      const artifactIndex = JSON.parse(await readFile(getBmadArtifactIndexPath(cwd), 'utf-8')) as { outputRoot?: string | null };
+      assert.equal(canonicalState.phase, 'implementation');
+      assert.equal(canonicalState.activeStoryRef, '_bmad-output/planning-artifacts/epics/story-login.md');
+      assert.equal(artifactIndex.outputRoot, outputRoot);
       const bmadArtifacts = (result.artifacts as { bmad?: { readiness?: { gapSummary?: string[] } } }).bmad;
       assert.equal(Array.isArray(bmadArtifacts?.readiness?.gapSummary ?? []), true);
     } finally {

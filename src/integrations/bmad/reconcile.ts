@@ -130,3 +130,10 @@ export async function reconcileBmadIntegrationState(
     driftLog,
   };
 }
+
+export async function ensureBmadIntegrationState(
+  projectRoot: string,
+  previousState?: BmadPersistedState | null,
+): Promise<BmadReconcileResult> {
+  return reconcileBmadIntegrationState(projectRoot, previousState);
+}

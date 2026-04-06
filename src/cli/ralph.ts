@@ -4,7 +4,7 @@ import { startMode, updateModeState } from '../modes/base.js';
 import { readApprovedExecutionLaunchHint, type ApprovedExecutionLaunchHint } from '../planning/artifacts.js';
 import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
 import { detectBmadProject } from '../integrations/bmad/discovery.js';
-import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
+import { ensureBmadIntegrationState } from '../integrations/bmad/reconcile.js';
 import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
 import {
   buildFollowupStaffingPlan,
@@ -216,9 +216,9 @@ export async function ralphCommand(args: string[]): Promise<void> {
   const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
   const staffingPlan = buildFollowupStaffingPlan('ralph', task, availableAgentTypes);
   let bmadContext: BmadExecutionContext | null = null;
-  let bmadState: Awaited<ReturnType<typeof reconcileBmadIntegrationState>>['state'] | null = null;
+  let bmadState: Awaited<ReturnType<typeof ensureBmadIntegrationState>>['state'] | null = null;
   if (detectBmadProject(cwd).detected) {
-    const reconciled = await reconcileBmadIntegrationState(cwd);
+    const reconciled = await ensureBmadIntegrationState(cwd);
     bmadState = reconciled.state;
     bmadContext = await resolveBmadExecutionContext(cwd, reconciled.artifactIndex, reconciled.state);
   }

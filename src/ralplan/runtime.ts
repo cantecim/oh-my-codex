@@ -1,7 +1,7 @@
 import { cancelMode, readModeState, startMode, updateModeState } from '../modes/base.js';
 import { readPlanningArtifacts } from '../planning/artifacts.js';
 import { detectBmadProject } from '../integrations/bmad/discovery.js';
-import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
+import { ensureBmadIntegrationState } from '../integrations/bmad/reconcile.js';
 import { deriveBmadReadiness } from '../integrations/bmad/readiness.js';
 import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
 import { buildBmadWorkflowHandoff } from '../integrations/bmad/handoff.js';
@@ -134,7 +134,7 @@ export async function runRalplanConsensus(
 
   const bmadDetected = detectBmadProject(cwd);
   if (bmadDetected.detected) {
-    const bmad = await reconcileBmadIntegrationState(cwd);
+    const bmad = await ensureBmadIntegrationState(cwd);
     const readiness = deriveBmadReadiness(bmad.artifactIndex, bmad.state);
     const context = await resolveBmadExecutionContext(cwd, bmad.artifactIndex, bmad.state);
     aggregatedArtifacts.bmad = {

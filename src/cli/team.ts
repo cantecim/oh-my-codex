@@ -11,7 +11,7 @@ import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
 import { classifyTaskSize } from '../hooks/task-size-detector.js';
 import { readApprovedExecutionLaunchHint } from '../planning/artifacts.js';
 import { detectBmadProject } from '../integrations/bmad/discovery.js';
-import { reconcileBmadIntegrationState } from '../integrations/bmad/reconcile.js';
+import { ensureBmadIntegrationState } from '../integrations/bmad/reconcile.js';
 import { resolveBmadExecutionContext } from '../integrations/bmad/context.js';
 import { recordBmadStoryHook } from '../integrations/bmad/hooks.js';
 import {
@@ -2132,7 +2132,7 @@ async function ensureTeamModeState(
 
 async function resolveTeamBmadContext(cwd: string): Promise<BmadExecutionContext | null> {
   if (!detectBmadProject(cwd).detected) return null;
-  const reconciled = await reconcileBmadIntegrationState(cwd);
+  const reconciled = await ensureBmadIntegrationState(cwd);
   return resolveBmadExecutionContext(cwd, reconciled.artifactIndex, reconciled.state);
 }
 

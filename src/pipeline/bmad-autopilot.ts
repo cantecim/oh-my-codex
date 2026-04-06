@@ -8,7 +8,7 @@ import { runBmadNativeExecution } from '../integrations/bmad/native-execution.js
 import { attemptBmadDriftRecovery } from '../integrations/bmad/recovery.js';
 import {
   persistBmadActiveSelection,
-  reconcileBmadIntegrationState,
+  ensureBmadIntegrationState,
 } from '../integrations/bmad/reconcile.js';
 import {
   resolveNextBmadStory,
@@ -201,7 +201,7 @@ export async function runBmadAutopilotCampaign(
     };
   }
 
-  const reconciled = await reconcileBmadIntegrationState(cwd);
+  const reconciled = await ensureBmadIntegrationState(cwd);
   const readiness = deriveBmadReadiness(reconciled.artifactIndex, reconciled.state);
   const initialContext = await resolveBmadExecutionContext(cwd, reconciled.artifactIndex, reconciled.state);
 
@@ -257,7 +257,7 @@ export async function runBmadAutopilotCampaign(
   let stopReason: BmadCampaignStopReason | null = null;
 
   for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
-    const before = await reconcileBmadIntegrationState(cwd);
+    const before = await ensureBmadIntegrationState(cwd);
     const beforeContext = await resolveBmadExecutionContext(cwd, before.artifactIndex, before.state);
     const nextStory = await resolveNextBmadStory(cwd, {
       index: before.artifactIndex,
@@ -431,7 +431,7 @@ export async function runBmadAutopilotCampaign(
       break;
     }
 
-    const after = await reconcileBmadIntegrationState(cwd);
+    const after = await ensureBmadIntegrationState(cwd);
     const afterContext = await resolveBmadExecutionContext(cwd, after.artifactIndex, after.state);
     const completion = await isBmadStoryComplete(cwd, {
       storyPath: nextStory.storyPath,
@@ -503,7 +503,7 @@ export async function runBmadAutopilotCampaign(
         }),
       });
       if (retry.status === 'completed') {
-        const afterRetry = await reconcileBmadIntegrationState(cwd);
+        const afterRetry = await ensureBmadIntegrationState(cwd);
         const retryContext = await resolveBmadExecutionContext(cwd, afterRetry.artifactIndex, afterRetry.state);
         const confirmed = await isBmadStoryComplete(cwd, {
           storyPath: nextStory.storyPath,

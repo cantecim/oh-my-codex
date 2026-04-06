@@ -1,7 +1,12 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { buildRalphAppendInstructions } from '../ralph.js';
+import { ralphCommand } from '../ralph.js';
 import type { BmadExecutionContext } from '../../integrations/bmad/contracts.js';
+import { getBmadArtifactIndexPath, getBmadStatePath } from '../../state/paths.js';
 
 const outputRoot = '_bmad-output';
 
@@ -33,5 +38,47 @@ describe('ralph BMAD contract', () => {
     assert.match(instructions, /Acceptance criteria: user can log in \| errors are shown/i);
     assert.match(instructions, /bounded BMAD writeback/i);
     assert.match(instructions, /Do not modify PRD, UX, architecture, or project-context/i);
+  });
+
+  it('writes canonical BMAD integration state during a BMAD-aware ralph launch', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-ralph-bmad-'));
+    const launchWithHud = mock.fn(async () => {});
+    try {
+      await mkdir(join(cwd, outputRoot, 'planning-artifacts', 'epics'), { recursive: true });
+      await mkdir(join(cwd, outputRoot, 'implementation-artifacts'), { recursive: true });
+      await writeFile(join(cwd, outputRoot, 'planning-artifacts', 'PRD.md'), '# PRD\n');
+      await writeFile(join(cwd, outputRoot, 'planning-artifacts', 'architecture.md'), '# Architecture\n');
+      await writeFile(join(cwd, outputRoot, 'planning-artifacts', 'epics', 'story-login.md'), '# Story\n');
+      await writeFile(join(cwd, outputRoot, 'implementation-artifacts', 'sprint-status.yaml'), 'stories:\n');
+
+      mock.method(process, 'cwd', () => cwd);
+      mock.module('../index.js', {
+        namedExports: { launchWithHud },
+      });
+
+      await ralphCommand(['Implement BMAD story']);
+
+      assert.equal(launchWithHud.mock.callCount(), 1);
+      const canonicalState = JSON.parse(await readFile(getBmadStatePath(cwd), 'utf-8')) as {
+        phase?: string;
+        activeStoryRef?: string | null;
+      };
+      const artifactIndex = JSON.parse(await readFile(getBmadArtifactIndexPath(cwd), 'utf-8')) as {
+        outputRoot?: string | null;
+      };
+      const ralphState = JSON.parse(await readFile(join(cwd, '.omx', 'state', 'ralph-state.json'), 'utf-8')) as {
+        bmad_phase?: string;
+        bmad_story_path?: string | null;
+      };
+
+      assert.equal(canonicalState.phase, 'implementation');
+      assert.equal(canonicalState.activeStoryRef, `${outputRoot}/planning-artifacts/epics/story-login.md`);
+      assert.equal(artifactIndex.outputRoot, outputRoot);
+      assert.equal(ralphState.bmad_phase, canonicalState.phase);
+      assert.equal(ralphState.bmad_story_path, canonicalState.activeStoryRef);
+    } finally {
+      mock.restoreAll();
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
