@@ -19,6 +19,7 @@ Bu yüzeylerin ortak sonucu:
 - runtime code path değil, test execution topology flaky hale geliyor
 
 Amaç:
+
 - her test case'i hermetic hale getirmek
 - drift'i “tekrar arızalanınca kovalanan” bir semptom olmaktan çıkarıp yapısal olarak engellemek
 - env propagation'ı tek contract altında toplamak
@@ -55,6 +56,7 @@ Bu plan için rollout modeli:
 - **guided explicit-first**
 
 Yani:
+
 - önce canonical isolated env contract kurulur
 - sonra mevcut testlerde bilinen gerekli env'ler explicit taşınır
 - fail eden yerlerde eksik bağımlılıklar görünür hale geldikçe explicit listeler tamamlanır
@@ -82,6 +84,7 @@ Bu yüzden:
 `OMX_TEST_*` env ailesi özel durumdur.
 
 Sebep:
+
 - bunlar runtime branching için değil
 - test/debug artifact ve harness transport'ı için tasarlanmış kontrollü surface'tir
 
@@ -146,9 +149,9 @@ Helper purity kuralı:
 Canonical isolated env API ailesi:
 
 ```ts
-buildIsolatedEnv(overrides)
-buildDebugChildEnv(cwd)
-buildChildEnv(cwd, overrides) // thin wrapper
+buildIsolatedEnv(overrides);
+buildDebugChildEnv(cwd);
+buildChildEnv(cwd, overrides); // thin wrapper
 ```
 
 Beklenen davranış:
@@ -168,7 +171,7 @@ Beklenen davranış:
 env: buildIsolatedEnv({
   ...buildDebugChildEnv(cwd),
   ...overrides,
-})
+});
 ```
 
 ### Child process rule
@@ -180,12 +183,12 @@ spawnSync(cmd, argv, {
   cwd,
   env: buildIsolatedEnv({
     ...buildDebugChildEnv(cwd),
-    PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
-    TMUX: '',
-    TMUX_PANE: '',
+    PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    TMUX: "",
+    TMUX_PANE: "",
     ...explicitOverrides,
   }),
-})
+});
 ```
 
 ### In-process fallback rule
@@ -227,24 +230,28 @@ Env dışında izlenecek diğer global/shared state yüzeyleri:
 Bu da drift kaynağıdır.
 
 Kural:
+
 - mümkünse kullanılmamalı
 - gerekiyorsa scoped restore zorunlu
 
 ### 2. In-process execution and module cache / singleton state
 
 Örnek risk:
+
 - import-time env snapshot
 - static config resolution
 - runtime binary selection cache
 - same-process test ordering
 
 Kural:
+
 - import-time branch selection yapan modüller child process'te test edilmeye daha uygundur
 - in-process test execution, hermetic child-process modele göre ikinci sınıf kabul edilir
 
 ### 3. Shared helper ambient reads and shared temp artifacts
 
 Örnek:
+
 - `tmux.log`
 - capture sequence files
 - counter files
@@ -252,6 +259,7 @@ Kural:
 - helper'ın ambient `process.env` ile branch değiştirmesi
 
 Kural:
+
 - ownership fixture-local olmalı
 - “çağrılırsa oluşur” varsayımı yerine explicit owner tanımlanmalı
 - helper behavior'ı fixture-local option/env contract dışında değişmemeli
@@ -259,11 +267,13 @@ Kural:
 ### 4. Timers / background loops
 
 Özellikle watcher ve runtime lane'lerinde:
+
 - pending timers
 - detached child processes
 - long-lived loops
 
 Kural:
+
 - test sonunda kapatılmayan background state test contamination sayılır
 
 ## Rollout Strategy
@@ -273,6 +283,7 @@ Bu iş için önerilen toplam rollout:
 - **4 pass**
 
 Sebep:
+
 - 2 pass çok büyük ve riskli
 - 5+ pass gereksiz uzatır
 - 4 pass, hem notify/tmux önceliğini hem repo-geneli enforcement'ı taşıyacak kadar dengeli
@@ -280,11 +291,13 @@ Sebep:
 ## Pass 1: Isolation Contract Hardening
 
 Amaç:
+
 - tek canonical isolation contract'ı netleştirmek
 - helper düzeyinde inheritance kurallarını stabilize etmek
 - hermetic execution sınırlarını netleştirmek
 
 Çalışma:
+
 - `buildIsolatedEnv` / `buildDebugChildEnv` / thin child wrapper final shape
 - `OMX_TEST_*` auto-forward policy netleştirme
 - runtime-affecting env reset matrix çıkarma
@@ -292,6 +305,7 @@ Amaç:
 - `process.chdir()` / in-process fallback / module-cache risk kurallarını netleştirme
 
 Acceptance:
+
 - tek source-of-truth isolation contract var
 - dokümantasyon + helper behavior uyumlu
 - yeni testler için canonical pattern hazır
@@ -299,21 +313,25 @@ Acceptance:
 ## Pass 2: Notify/Tmux Isolation Migration
 
 Amaç:
+
 - drift-prone notify/tmux test ailesini tamamen hermetic hale getirmek
 
 Kapsam:
+
 - notify hook testleri
 - fallback watcher
 - team dispatch / leader nudge / tmux heal / tmux guard
 - fake tmux helper kullanan tüm critical lane'ler
 
 Kurallar:
+
 - child env -> isolated env
 - in-process `process.env` mutation -> child process veya scoped explicit env
 - fake tmux helper ambient runtime env'den ayrılır
 - `process.chdir()` ve process-global runtime selector leakage kapatılır
 
 Acceptance:
+
 - notify/tmux ailesinde `env: process.env` ve `...process.env` yok
 - `PATH`, `OMX_RUNTIME_BINARY`, `TMUX*` explicit
 - same-process freeloading kalmıyor veya documented temporary fallback'a iniyor
@@ -322,15 +340,18 @@ Acceptance:
 ## Pass 3: Global Mutation Families
 
 Amaç:
+
 - notify/tmux dışındaki en riskli process-global contamination ailelerini kapatmak
 
 Öncelik:
+
 - `team/*`
 - `mcp/*`
 - `cli/*`
 - runtime-bridge ve tmux session testleri
 
 Özellikle hedeflenecek mutation pattern'leri:
+
 - `process.env.PATH =`
 - `process.env.OMX_RUNTIME_BINARY =`
 - `delete process.env.TMUX`
@@ -340,6 +361,7 @@ Amaç:
 - same-process runtime branch selection
 
 Acceptance:
+
 - scoped restore'suz process-global mutation kalmaması
 - child-process'e taşınabilecekler taşınmış olması
 - repo genel drift riski düşmüş olması
@@ -347,16 +369,19 @@ Acceptance:
 ## Pass 4: Enforcement + Residual Sweep
 
 Amaç:
+
 - kalan istisnaları kapatmak
 - kuralları kalıcı hale getirmek
 
 Çalışma:
+
 - targeted residual migration
 - static search checks
 - docs finalization
 - gerekiyorsa lint/test grep gate
 
 Acceptance:
+
 - canonical rule set repo standardı haline gelmiş
 - residual exceptions documented
 - full suite normal acceptance ile güvenilir
@@ -374,6 +399,7 @@ Bu rollout'ta uygulanacak migration politikası:
 ### Why not strict-first everywhere?
 
 Çünkü:
+
 - repo genelinde çok fazla global env mutation var
 - bir anda sıfır-env denemesi operasyonel olarak pahalı olur
 - guided explicit-first, migration hızını artırırken dependency'leri yine görünür kılar
@@ -397,8 +423,7 @@ Her pass sonunda:
 
 Program final acceptance'ta ayrıca:
 
-1. residual `withEnv` sweep kullanıcıya hatırlatılır, yapılana kadar uyarılır.
-2. `applyTmuxEnv` ve benzeri helper-level env restore / ambient-read residual'ları final sweep'te ayrıca gündeme getirilir; kapanmadan önce kullanıcı açıkça uyarılır.
+1. `applyTmuxEnv` ve benzeri helper-level env restore / ambient-read residual'ları final sweep'te ayrıca gündeme getirilir; kapanmadan önce kullanıcı açıkça uyarılır.
 
 Drift özel notu:
 
@@ -447,14 +472,15 @@ Bir PR bu plana uyumlu mu diye bakarken:
 
 Bu plan başlarken öncelikli sıcak noktalar:
 
-- [src/hooks/__tests__/notify-hook-team-dispatch.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/hooks/__tests__/notify-hook-team-dispatch.test.ts)
-- [src/hooks/__tests__/notify-hook-team-tmux-guard.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/hooks/__tests__/notify-hook-team-tmux-guard.test.ts)
+- [src/hooks/**tests**/notify-hook-team-dispatch.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/hooks/__tests__/notify-hook-team-dispatch.test.ts)
+- [src/hooks/**tests**/notify-hook-team-tmux-guard.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/hooks/__tests__/notify-hook-team-tmux-guard.test.ts)
 - [src/test-support/shared-harness.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/test-support/shared-harness.ts)
-- [src/team/__tests__/runtime.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/team/__tests__/runtime.test.ts)
-- [src/team/__tests__/tmux-session.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/team/__tests__/tmux-session.test.ts)
-- [src/mcp/__tests__/state-server.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/mcp/__tests__/state-server.test.ts)
+- [src/team/**tests**/runtime.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/team/__tests__/runtime.test.ts)
+- [src/team/**tests**/tmux-session.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/team/__tests__/tmux-session.test.ts)
+- [src/mcp/**tests**/state-server.test.ts](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/src/mcp/__tests__/state-server.test.ts)
 
 Sebep:
+
 - process-global env mutation yoğunluğu yüksek
 - PATH/TMUX/runtime-binary selection burada yapılıyor
 - drift ve suite-order contamination burada tekrar üretilebilir
@@ -464,6 +490,7 @@ Sebep:
 Bu planın hedefi yalnız flaky test azaltmak değildir.
 
 Asıl hedef:
+
 - test execution semantics'ini netleştirmek
 - env propagation'ı bir contract altına almak
 - env dışındaki process-global state yüzeylerini de aynı contract içine almak

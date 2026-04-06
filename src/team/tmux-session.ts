@@ -410,8 +410,16 @@ function resolveShellFromCandidates(paths: string[], rcFile: string): WorkerLaun
   return null;
 }
 
-function buildWorkerLaunchSpec(shellPath: string | undefined): WorkerLaunchSpec {
-  if (isMsysOrGitBash()) {
+function buildWorkerLaunchSpec(
+  shellPath: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): WorkerLaunchSpec {
+  const effectivePlatform: NodeJS.Platform =
+    env.MSYSTEM || env.OSTYPE
+      ? 'win32'
+      : platform;
+  if (isMsysOrGitBash(env, effectivePlatform)) {
     return buildShellLaunchSpec('/bin/sh', null);
   }
 
@@ -612,7 +620,15 @@ function shouldBypassDefaultSystemPrompt(env: NodeJS.ProcessEnv): boolean {
 }
 
 function buildModelInstructionsOverride(cwd: string, env: NodeJS.ProcessEnv): string {
-  const filePath = translatePathForMsys(env[OMX_MODEL_INSTRUCTIONS_FILE_ENV] || join(cwd, 'AGENTS.md'));
+  const translationPlatform: NodeJS.Platform =
+    env.MSYSTEM || env.OSTYPE
+      ? 'win32'
+      : process.platform;
+  const filePath = translatePathForMsys(
+    env[OMX_MODEL_INSTRUCTIONS_FILE_ENV] || join(cwd, 'AGENTS.md'),
+    env,
+    translationPlatform,
+  );
   return `${MODEL_INSTRUCTIONS_FILE_KEY}="${escapeTomlString(filePath)}"`;
 }
 
@@ -648,7 +664,7 @@ export function buildWorkerStartupCommand(
     initialPrompt,
     env,
   );
-  const launchSpec = buildWorkerLaunchSpec(env.SHELL);
+  const launchSpec = buildWorkerLaunchSpec(env.SHELL, env);
   const leaderNodeDir = resolveLeaderNodePath().replace(/\/[^/]+$/, ''); // dirname
   const pathPrefix = leaderNodeDir ? `export PATH='${leaderNodeDir}':$PATH; ` : '';
   const quotedArgs = processSpec.args.map(shellQuoteSingle).join(' ');
@@ -745,8 +761,8 @@ export function isNativeWindows(env: NodeJS.ProcessEnv = process.env, platform: 
 }
 
 // Check if tmux is available
-export function isTmuxAvailable(): boolean {
-  const { result } = spawnPlatformCommandSync('tmux', ['-V'], { encoding: 'utf-8' });
+export function isTmuxAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  const { result } = spawnPlatformCommandSync('tmux', ['-V'], { encoding: 'utf-8' }, process.platform, env);
   if (result.error) return false;
   return result.status === 0;
 }
@@ -768,7 +784,7 @@ export function createTeamSession(
   }> = [],
   env: NodeJS.ProcessEnv = process.env,
 ): TeamSession {
-  if (!isTmuxAvailable()) {
+  if (!isTmuxAvailable(env)) {
     throw new Error('tmux is not available');
   }
   if (!Number.isInteger(workerCount) || workerCount < 1) {
@@ -1287,9 +1303,10 @@ export function dismissTrustPromptIfPresent(
   sessionName: string,
   workerIndex: number,
   workerPaneId?: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (process.env.OMX_TEAM_AUTO_TRUST === '0') return false;
-  if (!isTmuxAvailable()) return false;
+  if (env.OMX_TEAM_AUTO_TRUST === '0') return false;
+  if (!isTmuxAvailable(env)) return false;
   const target = paneTarget(sessionName, workerIndex, workerPaneId);
   const result = runTmux(sharedBuildVisibleCapturePaneArgv(target));
   if (!result.ok) return false;

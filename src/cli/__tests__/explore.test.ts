@@ -22,7 +22,7 @@ import {
   resolvePackagedExploreHarnessCommand,
 } from '../explore.js';
 import { withPackagedExploreHarnessHidden, withPackagedExploreHarnessLock } from './packaged-explore-harness-lock.js';
-import { buildChildEnv, withEnv, withWorkingDir } from '../../test-support/shared-harness.js';
+import { buildChildEnv, withWorkingDir } from '../../test-support/shared-harness.js';
 
 function runOmx(
   cwd: string,
@@ -71,10 +71,9 @@ async function runExploreCommandForTest(
 
   process.exitCode = 0;
   try {
-    await withEnv(envOverrides, async () => {
-      await withWorkingDir(cwd, async () => {
-        await exploreCommand(argv);
-      });
+    const env = buildChildEnv(cwd, envOverrides);
+    await withWorkingDir(cwd, async () => {
+      await exploreCommand(argv, env);
     });
   } finally {
     process.stdout.write = originalStdout;
@@ -709,10 +708,8 @@ describe('exploreCommand', () => {
       }) as typeof process.stderr.write;
 
       try {
-        await withEnv({ OMX_EXPLORE_BIN: stub }, async () => {
-          await withWorkingDir(wd, async () => {
-            await exploreCommand(['--prompt', 'find', 'auth']);
-          });
+        await withWorkingDir(wd, async () => {
+          await exploreCommand(['--prompt', 'find', 'auth'], buildChildEnv(wd, { OMX_EXPLORE_BIN: stub }));
         });
       } finally {
         process.stdout.write = originalStdout;

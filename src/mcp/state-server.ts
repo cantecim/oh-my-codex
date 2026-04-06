@@ -211,7 +211,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 export async function handleStateToolCall(request: {
 	params: { name: string; arguments?: Record<string, unknown> };
-}) {
+}, env: NodeJS.ProcessEnv = process.env) {
 	const { name, arguments: args } = request.params;
 	const wd = (args as Record<string, unknown>)?.workingDirectory as
 		| string
@@ -260,7 +260,7 @@ export async function handleStateToolCall(request: {
 				await mkdir(getStateDir(cwd, effectiveSessionId), { recursive: true });
 			}
 			const { ensureTmuxHookInitialized } = await import("../cli/tmux-hook.js");
-			await ensureTmuxHookInitialized(cwd);
+			await ensureTmuxHookInitialized(cwd, env);
 		}
 
 		if (TEAM_COMM_TOOL_NAMES.has(name)) {
@@ -528,4 +528,13 @@ export async function handleStateToolCall(request: {
 server.setRequestHandler(CallToolRequestSchema, handleStateToolCall);
 
 // Start server
-autoStartStdioMcpServer("state", server);
+if (!shouldDisableStateServerAutoStartForModule(import.meta.url)) {
+	autoStartStdioMcpServer("state", server);
+}
+function shouldDisableStateServerAutoStartForModule(url: string): boolean {
+	try {
+		return new URL(url).searchParams.get("disableAutoStart") === "1";
+	} catch {
+		return false;
+	}
+}

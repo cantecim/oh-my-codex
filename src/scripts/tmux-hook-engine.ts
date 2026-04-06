@@ -264,8 +264,8 @@ function isHudStartCommand(startCommand: string): boolean {
  * All callers (auto-nudge, ralph steer, team dispatch, tmux injection) should
  * use this instead of raw `process.env.TMUX_PANE`.
  */
-export function resolveCodexPane(): string {
-  const envPane = (process.env.TMUX_PANE || '').trim();
+export function resolveCodexPane(env: NodeJS.ProcessEnv = process.env): string {
+  const envPane = (env.TMUX_PANE || '').trim();
   if (!envPane) return '';
 
   try {

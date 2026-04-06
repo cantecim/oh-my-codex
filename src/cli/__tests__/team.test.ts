@@ -14,14 +14,15 @@ import {
   writeTaskApproval,
   writeWorkerStatus,
 } from '../../team/state.js';
-import { withEnv, withWorkingDir } from '../../test-support/shared-harness.js';
+import { buildChildEnv, withWorkingDir } from '../../test-support/shared-harness.js';
 
 
-function withoutTeamTestWorkerEnv<T>(fn: () => T): T {
-  return withEnv({
+function buildTeamTestEnv(cwd: string, overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
+  return buildChildEnv(cwd, {
     OMX_TEAM_WORKER: undefined,
     OMX_TEAM_STATE_ROOT: undefined,
-  }, fn) as T;
+    ...overrides,
+  });
 }
 
 describe('parseTeamStartArgs', () => {
@@ -697,8 +698,9 @@ describe('teamCommand status', () => {
     const originalLog = console.log;
     try {
       process.chdir(wd);
-      const config = await withoutTeamTestWorkerEnv(() => initTeamState('pane-team', 'inspect worker panes', 'executor', 2, wd));
-      await withoutTeamTestWorkerEnv(() => createTask('pane-team', {
+      const env = buildTeamTestEnv(wd);
+      const config = await initTeamState('pane-team', 'inspect worker panes', 'executor', 2, wd, undefined, env);
+      await createTask('pane-team', {
         subject: 'Recover worker-1 progress',
         description: 'Inspect worker-1 pane',
         status: 'pending',
@@ -706,8 +708,8 @@ describe('teamCommand status', () => {
         requires_code_change: true,
         role: 'debugger',
         owner: 'worker-1',
-      }, wd));
-      await withoutTeamTestWorkerEnv(() => createTask('pane-team', {
+      }, wd);
+      await createTask('pane-team', {
         subject: 'Recover worker-2 progress',
         description: 'Inspect worker-2 pane',
         status: 'pending',
@@ -719,7 +721,7 @@ describe('teamCommand status', () => {
         owner: 'worker-2',
         result: 'waiting on worker-1',
         error: 'blocked by dependency',
-      }, wd));
+      }, wd);
       await writeFile(
         join(wd, '.omx', 'state', 'team', 'pane-team', 'tasks', 'task-1.json'),
         `${JSON.stringify({
@@ -818,7 +820,7 @@ describe('teamCommand status', () => {
       );
 
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'pane-team']));
+      await teamCommand(['status', 'pane-team'], { cwd: wd, env });
 
       const output = logs.join('\n');
       assert.match(output, /panes: leader=%10 hud=%11/);
@@ -842,8 +844,9 @@ describe('teamCommand status', () => {
     const originalLog = console.log;
     try {
       process.chdir(wd);
-      const config = await withoutTeamTestWorkerEnv(() => initTeamState('pane-json-team', 'inspect worker panes', 'executor', 1, wd));
-      await withoutTeamTestWorkerEnv(() => createTask('pane-json-team', {
+      const env = buildTeamTestEnv(wd);
+      const config = await initTeamState('pane-json-team', 'inspect worker panes', 'executor', 1, wd, undefined, env);
+      await createTask('pane-json-team', {
         subject: 'Recover worker-1 progress',
         description: 'Inspect worker-1 pane',
         status: 'pending',
@@ -851,7 +854,7 @@ describe('teamCommand status', () => {
         requires_code_change: true,
         role: 'debugger',
         owner: 'worker-1',
-      }, wd));
+      }, wd);
       await writeFile(
         join(wd, '.omx', 'state', 'team', 'pane-json-team', 'tasks', 'task-1.json'),
         `${JSON.stringify({
@@ -919,7 +922,7 @@ describe('teamCommand status', () => {
       );
 
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'pane-json-team', '--json']));
+      await teamCommand(['status', 'pane-json-team', '--json'], { cwd: wd, env });
 
       const payload = JSON.parse(logs.at(-1) ?? '{}') as {
         schema_version?: string;
@@ -1237,7 +1240,8 @@ describe('teamCommand status', () => {
     const originalLog = console.log;
     try {
       process.chdir(wd);
-      const config = await withoutTeamTestWorkerEnv(() => initTeamState('workspace-mode-team', 'inspect workspace mode', 'executor', 1, wd));
+      const env = buildTeamTestEnv(wd);
+      const config = await initTeamState('workspace-mode-team', 'inspect workspace mode', 'executor', 1, wd, undefined, env);
       config.workspace_mode = 'worktree';
       const teamDir = join(wd, '.omx', 'state', 'team', 'workspace-mode-team');
       const configPath = join(teamDir, 'config.json');
@@ -1249,7 +1253,7 @@ describe('teamCommand status', () => {
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'workspace-mode-team']));
+      await teamCommand(['status', 'workspace-mode-team'], { cwd: wd, env });
 
       assert.ok(logs.some((line) => /workspace_mode: worktree/.test(line)));
     } finally {
@@ -1266,7 +1270,8 @@ describe('teamCommand status', () => {
     const originalLog = console.log;
     try {
       process.chdir(wd);
-      const config = await withoutTeamTestWorkerEnv(() => initTeamState('workspace-mode-json-team', 'inspect workspace mode', 'executor', 1, wd));
+      const env = buildTeamTestEnv(wd);
+      const config = await initTeamState('workspace-mode-json-team', 'inspect workspace mode', 'executor', 1, wd, undefined, env);
       config.workspace_mode = 'worktree';
       const teamDir = join(wd, '.omx', 'state', 'team', 'workspace-mode-json-team');
       const configPath = join(teamDir, 'config.json');
@@ -1278,7 +1283,7 @@ describe('teamCommand status', () => {
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'workspace-mode-json-team', '--json']));
+      await teamCommand(['status', 'workspace-mode-json-team', '--json'], { cwd: wd, env });
 
       const payload = JSON.parse(logs[0] ?? '{}') as { workspace_mode?: string | null; status?: string };
       assert.equal(payload.status, 'ok');
@@ -1298,7 +1303,7 @@ describe('teamCommand status', () => {
     try {
       process.chdir(wd);
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'missing-team', '--json']));
+      await teamCommand(['status', 'missing-team', '--json'], { cwd: wd, env: buildTeamTestEnv(wd) });
 
       const payload = JSON.parse(logs.at(-1) ?? '{}') as {
         schema_version?: string;
@@ -1326,10 +1331,10 @@ describe('teamCommand status', () => {
     const originalLog = console.log;
     try {
       process.chdir(wd);
-      await withoutTeamTestWorkerEnv(() => initTeamState('activity-team', 'inspect activity', 'executor', 1, wd));
+      await initTeamState('activity-team', 'inspect activity', 'executor', 1, wd, undefined, buildTeamTestEnv(wd));
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'activity-team', '--json']));
+      await teamCommand(['status', 'activity-team', '--json'], { cwd: wd, env: buildTeamTestEnv(wd) });
 
       const activity = JSON.parse(await readFile(join(wd, '.omx', 'state', 'leader-runtime-activity.json'), 'utf-8')) as {
         last_activity_at?: string;
@@ -1355,7 +1360,8 @@ describe('teamCommand status', () => {
     const originalLog = console.log;
     try {
       process.chdir(wd);
-      const config = await withoutTeamTestWorkerEnv(() => initTeamState('pane-tail-team', 'inspect worker panes', 'executor', 1, wd));
+      const env = buildTeamTestEnv(wd);
+      const config = await initTeamState('pane-tail-team', 'inspect worker panes', 'executor', 1, wd, undefined, env);
       config.workers[0]!.pane_id = '%51';
       const manifestPath = join(wd, '.omx', 'state', 'team', 'pane-tail-team', 'manifest.v2.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as {
@@ -1375,11 +1381,11 @@ describe('teamCommand status', () => {
       );
 
       console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'pane-tail-team', '--tail-lines', '600']));
+      await teamCommand(['status', 'pane-tail-team', '--tail-lines', '600'], { cwd: wd, env });
       assert.match(logs.join('\n'), /inspect_worker-1: omx sparkshell --tmux-pane %51 --tail-lines 600/);
 
       logs.length = 0;
-      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'pane-tail-team', '--json', '--tail-lines=550']));
+      await teamCommand(['status', 'pane-tail-team', '--json', '--tail-lines=550'], { cwd: wd, env });
       const payload = JSON.parse(logs.at(-1) ?? '{}') as {
         tail_lines?: number;
         panes?: { sparkshell_commands?: Record<string, string> };
@@ -1462,29 +1468,29 @@ process.on('SIGTERM', () => process.exit(0));
 
     try {
       await withWorkingDir(wd, async () => {
-        await withEnv({
+        const env = buildTeamTestEnv(wd, {
           PATH: `${binDir}:${previousPath ?? ''}`,
           TMUX: undefined,
           OMX_TEAM_WORKER_LAUNCH_MODE: 'prompt',
           OMX_TEAM_WORKER_CLI: 'codex',
-        }, async () => {
-          console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-          process.stderr.write = ((chunk: string | Uint8Array) => {
-            stderr.push(String(chunk));
-            return true;
-          }) as typeof process.stderr.write;
+        });
+        console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+          stderr.push(String(chunk));
+          return true;
+        }) as typeof process.stderr.write;
 
-          await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+        await teamCommand(['1:executor', teamTask], { cwd: wd, env });
           await new Promise((resolve) => setTimeout(resolve, 500));
 
           logs.length = 0;
           stderr.length = 0;
-          await withoutTeamTestWorkerEnv(() => teamCommand(['status', teamName]));
+          await teamCommand(['status', teamName], { cwd: wd, env });
           assert.match(logs.join('\n'), /phase=failed/);
           assert.doesNotMatch(stderr.join('\n'), /ESRCH/);
 
           logs.length = 0;
-          await withoutTeamTestWorkerEnv(() => teamCommand(['await', teamName, '--json', '--timeout-ms', '250']));
+          await teamCommand(['await', teamName, '--json', '--timeout-ms', '250'], { cwd: wd, env });
           const payload = JSON.parse(logs.at(-1) ?? '{}') as {
             team_name?: string;
             status?: string;
@@ -1494,7 +1500,6 @@ process.on('SIGTERM', () => process.exit(0));
           assert.equal(payload.status, 'event');
           assert.equal(payload.event?.type, 'worker_stopped');
           assert.equal(payload.event?.worker, 'worker-1');
-        });
       });
     } finally {
       console.log = originalLog;
@@ -1505,7 +1510,10 @@ process.on('SIGTERM', () => process.exit(0));
 
   it('rejects legacy omx team ralph launches at command entry', async () => {
     await assert.rejects(
-      () => withoutTeamTestWorkerEnv(() => teamCommand(['ralph', '1:executor', 'issue 742 linked ralph launch'])),
+      () => teamCommand(['ralph', '1:executor', 'issue 742 linked ralph launch'], {
+        cwd: process.cwd(),
+        env: buildTeamTestEnv(process.cwd()),
+      }),
       /Deprecated usage: `omx team ralph \.\.\.` has been removed/,
     );
   });

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { buildChildEnv, withEnv } from '../test-support/shared-harness.js';
+import { buildChildEnv } from '../test-support/shared-harness.js';
 import { toLegacyDisplayPath } from '../utils/display-path.js';
 import { ensureWorktree, planWorktreeTarget } from '../team/worktree.js';
 import { loadAutoresearchMissionContract } from '../autoresearch/contracts.js';
@@ -92,10 +92,10 @@ async function runGuidedAutoresearchDeepInterview(
   const existingResultPaths = new Set(await listAutoresearchDeepInterviewResultPaths(repoRoot));
   const existingDraftPaths = new Set(await listAutoresearchDeepInterviewDraftPaths(repoRoot));
 
-  await withEnv({ [AUTORESEARCH_APPEND_INSTRUCTIONS_ENV]: appendixPath }, async () => {
-    const { launchWithHud } = await import('./index.js');
-    await launchWithHud([buildAutoresearchDeepInterviewPrompt(seedArgs ?? {})]);
-  });
+  const { launchWithHud } = await import('./index.js');
+  await launchWithHud([buildAutoresearchDeepInterviewPrompt(seedArgs ?? {})], buildChildEnv(repoRoot, {
+    [AUTORESEARCH_APPEND_INSTRUCTIONS_ENV]: appendixPath,
+  }));
 
   const result = await resolveAutoresearchDeepInterviewResult(repoRoot, {
     excludeResultPaths: existingResultPaths,
@@ -237,29 +237,27 @@ async function runAutoresearchLoop(
   },
   missionDir: string,
 ): Promise<void> {
-  await withEnv({ [AUTORESEARCH_APPEND_INSTRUCTIONS_ENV]: runtime.instructionsFile }, async () => {
-    while (true) {
-      runAutoresearchTurn(runtime.worktreePath, runtime.instructionsFile, codexArgs);
+  while (true) {
+    runAutoresearchTurn(runtime.worktreePath, runtime.instructionsFile, codexArgs);
 
-      const contract = await loadAutoresearchMissionContract(missionDir);
-      const { run_id: runId } = JSON.parse(readFileSync(runtime.manifestFile, 'utf-8')) as { run_id: string };
-      const manifest = await loadAutoresearchRunManifest(runtime.repoRoot, runId);
-      const decision = await processAutoresearchCandidate(contract, manifest, runtime.repoRoot);
-      if (decision === 'abort' || decision === 'error') {
+    const contract = await loadAutoresearchMissionContract(missionDir);
+    const { run_id: runId } = JSON.parse(readFileSync(runtime.manifestFile, 'utf-8')) as { run_id: string };
+    const manifest = await loadAutoresearchRunManifest(runtime.repoRoot, runId);
+    const decision = await processAutoresearchCandidate(contract, manifest, runtime.repoRoot);
+    if (decision === 'abort' || decision === 'error') {
+      return;
+    }
+    if (decision === 'noop') {
+      const trailingNoops = await countTrailingAutoresearchNoops(manifest.ledger_file);
+      if (trailingNoops >= AUTORESEARCH_MAX_CONSECUTIVE_NOOPS) {
+        await finalizeAutoresearchRunState(runtime.repoRoot, manifest.run_id, {
+          status: 'stopped',
+          stopReason: `repeated noop limit reached (${AUTORESEARCH_MAX_CONSECUTIVE_NOOPS})`,
+        });
         return;
       }
-      if (decision === 'noop') {
-        const trailingNoops = await countTrailingAutoresearchNoops(manifest.ledger_file);
-        if (trailingNoops >= AUTORESEARCH_MAX_CONSECUTIVE_NOOPS) {
-          await finalizeAutoresearchRunState(runtime.repoRoot, manifest.run_id, {
-            status: 'stopped',
-            stopReason: `repeated noop limit reached (${AUTORESEARCH_MAX_CONSECUTIVE_NOOPS})`,
-          });
-          return;
-        }
-      }
     }
-  });
+  }
 }
 
 function checkTmuxAvailable(): boolean {

@@ -42,6 +42,8 @@ type TeamWorkerCli = Exclude<WorkerInfo['worker_cli'], undefined>;
 
 interface TeamCliOptions {
   verbose?: boolean;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 interface ParsedTeamArgs {
@@ -2206,8 +2208,8 @@ function buildLeaderEnvSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.en
 }
 
 export async function teamCommand(args: string[], _options: TeamCliOptions = {}): Promise<void> {
-  const cwd = process.cwd();
-  const leaderEnvSnapshot = buildLeaderEnvSnapshot(cwd);
+  const cwd = _options.cwd ?? process.cwd();
+  const leaderEnvSnapshot = buildLeaderEnvSnapshot(cwd, _options.env);
   const parsedWorktree = parseWorktreeMode(args);
   const worktreeMode = resolveDefaultTeamWorktreeMode(parsedWorktree.mode);
   const teamArgs = parsedWorktree.remainingArgs;

@@ -502,61 +502,84 @@ describe('paneLooksReady gate: status-only is not ready (#391)', () => {
 
 describe('buildWorkerStartupCommand', () => {
   it('auto-selects gemini worker CLI from gemini model', async () => {
-    await withEnv({
-      SHELL: '/bin/bash',
-      OMX_TEAM_WORKER_CLI: undefined,
-      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
-    }, async () => {
-      const cmd = buildWorkerStartupCommand(
-        'alpha',
-        1,
-        ['--model', 'gemini-2.0-pro'],
-        process.cwd(),
-        {},
-        undefined,
-        'Read worker inbox',
-      );
-      assert.match(cmd, /exec .*gemini/);
-      assert.match(cmd, /--approval-mode/);
-      assert.match(cmd, /yolo/);
-      assert.match(cmd, /--model/);
-      assert.match(cmd, /gemini-2.0-pro/);
-      assert.match(cmd, /(?:^|\s|')-i(?:'|\s|$)/);
-      assert.match(cmd, /Read worker inbox/);
-      assert.match(cmd, /Read worker inbox/);
-    });
+    const cmd = buildWorkerStartupCommand(
+      'alpha',
+      1,
+      ['--model', 'gemini-2.0-pro'],
+      process.cwd(),
+      {},
+      undefined,
+      'Read worker inbox',
+      {
+        ...process.env,
+        SHELL: '/bin/bash',
+        OMX_TEAM_WORKER_CLI: undefined,
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+      },
+    );
+    assert.match(cmd, /exec .*gemini/);
+    assert.match(cmd, /--approval-mode/);
+    assert.match(cmd, /yolo/);
+    assert.match(cmd, /--model/);
+    assert.match(cmd, /gemini-2.0-pro/);
+    assert.match(cmd, /(?:^|\s|')-i(?:'|\s|$)/);
+    assert.match(cmd, /Read worker inbox/);
+    assert.match(cmd, /Read worker inbox/);
   });
 
   it('auto-selects claude worker CLI from claude model', async () => {
-    await withEnv({
-      SHELL: '/bin/bash',
-      OMX_TEAM_WORKER_CLI: undefined,
-      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
-    }, async () => {
-      const cmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'claude-3-7-sonnet']);
-      assert.match(cmd, /exec .*claude/);
-      assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
-      assert.doesNotMatch(cmd, /--model/);
-      assert.doesNotMatch(cmd, /model_instructions_file=/);
-    });
+    const cmd = buildWorkerStartupCommand(
+      'alpha',
+      1,
+      ['--model', 'claude-3-7-sonnet'],
+      process.cwd(),
+      {},
+      undefined,
+      undefined,
+      {
+        ...process.env,
+        SHELL: '/bin/bash',
+        OMX_TEAM_WORKER_CLI: undefined,
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+      },
+    );
+    assert.match(cmd, /exec .*claude/);
+    assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
+    assert.doesNotMatch(cmd, /--model/);
+    assert.doesNotMatch(cmd, /model_instructions_file=/);
   });
 
   it('respects explicit OMX_TEAM_WORKER_CLI override', async () => {
-    await withEnv({
+    const baseEnv = {
+      ...process.env,
       SHELL: '/bin/bash',
       OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
-      OMX_TEAM_WORKER_CLI: 'codex',
-    }, async () => {
-      const codexCmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'claude-3-7-sonnet']);
-      assert.match(codexCmd, /exec .*codex/);
+    };
+    const codexCmd = buildWorkerStartupCommand(
+      'alpha',
+      1,
+      ['--model', 'claude-3-7-sonnet'],
+      process.cwd(),
+      {},
+      undefined,
+      undefined,
+      { ...baseEnv, OMX_TEAM_WORKER_CLI: 'codex' },
+    );
+    assert.match(codexCmd, /exec .*codex/);
 
-      await withEnv({ OMX_TEAM_WORKER_CLI: 'claude' }, async () => {
-        const claudeCmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'gpt-5']);
-        assert.match(claudeCmd, /exec .*claude/);
-        assert.equal((claudeCmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
-        assert.doesNotMatch(claudeCmd, /--model/);
-      });
-    });
+    const claudeCmd = buildWorkerStartupCommand(
+      'alpha',
+      1,
+      ['--model', 'gpt-5'],
+      process.cwd(),
+      {},
+      undefined,
+      undefined,
+      { ...baseEnv, OMX_TEAM_WORKER_CLI: 'claude' },
+    );
+    assert.match(claudeCmd, /exec .*claude/);
+    assert.equal((claudeCmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
+    assert.doesNotMatch(claudeCmd, /--model/);
   });
 
   it('applies claude skip-permissions when worker CLI is provided by plan override', () => {
@@ -586,39 +609,46 @@ describe('buildWorkerStartupCommand', () => {
   });
 
   it('drops all explicit launch args for claude workers', async () => {
-    await withEnv({
-      SHELL: '/bin/bash',
-      OMX_TEAM_WORKER_CLI: 'claude',
-      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
-    }, async () => {
-      const cmd = buildWorkerStartupCommand('alpha', 1, [
+    const cmd = buildWorkerStartupCommand(
+      'alpha',
+      1,
+      [
         '--dangerously-bypass-approvals-and-sandbox',
         '-c', 'model_instructions_file="/tmp/custom.md"',
         '--model', 'claude-3-7-sonnet',
-      ]);
-      assert.match(cmd, /exec .*claude/);
-      assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
-      assert.doesNotMatch(cmd, /dangerously-bypass-approvals-and-sandbox/);
-      assert.doesNotMatch(cmd, /model_instructions_file=/);
-      assert.doesNotMatch(cmd, /--model/);
-      assert.doesNotMatch(cmd, /claude-3-7-sonnet/);
-    });
+      ],
+      process.cwd(),
+      {},
+      undefined,
+      undefined,
+      {
+        ...process.env,
+        SHELL: '/bin/bash',
+        OMX_TEAM_WORKER_CLI: 'claude',
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
+      },
+    );
+    assert.match(cmd, /exec .*claude/);
+    assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
+    assert.doesNotMatch(cmd, /dangerously-bypass-approvals-and-sandbox/);
+    assert.doesNotMatch(cmd, /model_instructions_file=/);
+    assert.doesNotMatch(cmd, /--model/);
+    assert.doesNotMatch(cmd, /claude-3-7-sonnet/);
   });
 
   it('does not pass bypass flags in claude mode', async () => {
     const prevArgv = process.argv;
     process.argv = [...prevArgv, '--madmax'];
     try {
-      await withEnv({
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], process.cwd(), {}, undefined, undefined, {
+        ...process.env,
         SHELL: '/bin/bash',
         OMX_TEAM_WORKER_CLI: 'claude',
         OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
-      }, async () => {
-        const cmd = buildWorkerStartupCommand('alpha', 1);
-        assert.match(cmd, /exec .*claude/);
-        assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
-        assert.doesNotMatch(cmd, /dangerously-bypass-approvals-and-sandbox/);
       });
+      assert.match(cmd, /exec .*claude/);
+      assert.equal((cmd.match(/--dangerously-skip-permissions/g) || []).length, 1);
+      assert.doesNotMatch(cmd, /dangerously-bypass-approvals-and-sandbox/);
     } finally {
       process.argv = prevArgv;
     }
@@ -834,36 +864,45 @@ describe('buildWorkerStartupCommand', () => {
   });
 
   it('injects model_instructions_file override by default', async () => {
-    await withEnv({
-      SHELL: '/bin/bash',
-      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
-      OMX_MODEL_INSTRUCTIONS_FILE: undefined,
-    }, async () => {
-      const cmd = buildWorkerStartupCommand('alpha', 1, [], '/tmp/project');
-      assert.match(cmd, /'-c'/);
-      assert.match(cmd, /model_instructions_file=/);
-      assert.match(cmd, /AGENTS\.md/);
-    });
+    const cmd = buildWorkerStartupCommand(
+      'alpha',
+      1,
+      [],
+      '/tmp/project',
+      {},
+      undefined,
+      undefined,
+      {
+        ...process.env,
+        SHELL: '/bin/bash',
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
+        OMX_MODEL_INSTRUCTIONS_FILE: undefined,
+      },
+    );
+    assert.match(cmd, /'-c'/);
+    assert.match(cmd, /model_instructions_file=/);
+    assert.match(cmd, /AGENTS\.md/);
   });
 
 
   it('uses per-worker OMX_MODEL_INSTRUCTIONS_FILE from extraEnv when building process launch spec', async () => {
-    await withEnv({
-      OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
-      OMX_MODEL_INSTRUCTIONS_FILE: undefined,
-    }, async () => {
-      const spec = buildWorkerProcessLaunchSpec(
-        'alpha',
-        1,
-        ['-c', 'model_reasoning_effort="low"'],
-        '/tmp/project',
-        { OMX_MODEL_INSTRUCTIONS_FILE: '/tmp/project/.omx/state/team/alpha/workers/worker-1/AGENTS.md' },
-        'codex',
-      );
-      const joined = spec.args.join(' ');
-      assert.match(joined, /model_reasoning_effort="low"/);
-      assert.match(joined, /model_instructions_file="\/tmp\/project\/.omx\/state\/team\/alpha\/workers\/worker-1\/AGENTS\.md"/);
-    });
+    const spec = buildWorkerProcessLaunchSpec(
+      'alpha',
+      1,
+      ['-c', 'model_reasoning_effort="low"'],
+      '/tmp/project',
+      { OMX_MODEL_INSTRUCTIONS_FILE: '/tmp/project/.omx/state/team/alpha/workers/worker-1/AGENTS.md' },
+      'codex',
+      undefined,
+      {
+        ...process.env,
+        OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
+        OMX_MODEL_INSTRUCTIONS_FILE: undefined,
+      },
+    );
+    const joined = spec.args.join(' ');
+    assert.match(joined, /model_reasoning_effort="low"/);
+    assert.match(joined, /model_instructions_file="\/tmp\/project\/.omx\/state\/team\/alpha\/workers\/worker-1\/AGENTS\.md"/);
   });
 
   it('does not inject model_instructions_file override when disabled', () => {
@@ -909,15 +948,14 @@ describe('buildWorkerStartupCommand', () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      await withEnv({
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo', {}, undefined, undefined, {
+        ...process.env,
         SHELL: '/bin/bash',
         OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: undefined,
         OMX_MODEL_INSTRUCTIONS_FILE: 'C:\\repo\\AGENTS.md',
         MSYSTEM: 'MINGW64',
-      }, async () => {
-        const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
-        assert.match(cmd, /model_instructions_file=\"\/c\/repo\/AGENTS\.md\"/);
       });
+      assert.match(cmd, /model_instructions_file=\"\/c\/repo\/AGENTS\.md\"/);
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
     }
@@ -960,16 +998,15 @@ describe('buildWorkerStartupCommand', () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      await withEnv({
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo', {}, undefined, undefined, {
+        ...process.env,
         SHELL: '/bin/zsh',
         OMX_BYPASS_DEFAULT_SYSTEM_PROMPT: '0',
         MSYSTEM: 'MINGW64',
-      }, async () => {
-        const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
-        assert.match(cmd, /\/bin\/sh/, 'must use /bin/sh on MSYS2/Windows');
-        assert.doesNotMatch(cmd, /\/zsh/, 'must not attempt zsh on Windows');
-        assert.doesNotMatch(cmd, /\.zshrc/, 'must not source zshrc on Windows');
       });
+      assert.match(cmd, /\/bin\/sh/, 'must use /bin/sh on MSYS2/Windows');
+      assert.doesNotMatch(cmd, /\/zsh/, 'must not attempt zsh on Windows');
+      assert.doesNotMatch(cmd, /\.zshrc/, 'must not source zshrc on Windows');
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
     }
@@ -1525,10 +1562,9 @@ esac
 
 describe('dismissTrustPromptIfPresent capture shape', () => {
   it('uses visible capture-pane argv without tail flags', async () => {
-    await withEnv({ OMX_TEAM_AUTO_TRUST: undefined }, async () => {
-      await withMockTmuxFixture(
-        'omx-tmux-dismiss-trust-visible-capture-',
-        (logPath) => `#!/bin/sh
+    await withMockTmuxFixture(
+      'omx-tmux-dismiss-trust-visible-capture-',
+      (logPath) => `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "${logPath}"
 case "$1" in
@@ -1547,14 +1583,16 @@ EOF
     ;;
 esac
 `,
-        async ({ logPath }) => {
-          assert.equal(dismissTrustPromptIfPresent('omx-team-x', 1), true);
-          const log = await readFile(logPath, 'utf-8');
-          assert.match(log, /capture-pane -t omx-team-x:1 -p/);
-          assert.doesNotMatch(log, /capture-pane -t omx-team-x:1 -p -S/);
-        },
-      );
-    });
+      async ({ logPath }) => {
+        assert.equal(
+          dismissTrustPromptIfPresent('omx-team-x', 1, undefined, { ...process.env, OMX_TEAM_AUTO_TRUST: undefined }),
+          true,
+        );
+        const log = await readFile(logPath, 'utf-8');
+        assert.match(log, /capture-pane -t omx-team-x:1 -p/);
+        assert.doesNotMatch(log, /capture-pane -t omx-team-x:1 -p -S/);
+      },
+    );
   });
 });
 
@@ -1566,16 +1604,18 @@ describe('dismissTrustPromptIfPresent', () => {
   });
 
   it('returns false when OMX_TEAM_AUTO_TRUST is disabled', async () => {
-    await withEnv({ OMX_TEAM_AUTO_TRUST: '0' }, async () => {
-      assert.equal(dismissTrustPromptIfPresent('omx-team-x', 1), false);
-    });
+    assert.equal(
+      dismissTrustPromptIfPresent('omx-team-x', 1, undefined, { ...process.env, OMX_TEAM_AUTO_TRUST: '0' }),
+      false,
+    );
   });
 
   it('returns false when OMX_TEAM_AUTO_TRUST is unset (auto-trust enabled) but tmux unavailable', async () => {
-    await withEnv({ OMX_TEAM_AUTO_TRUST: undefined }, async () => {
-      withEmptyPath(() => {
-        assert.equal(dismissTrustPromptIfPresent('omx-team-x', 1), false);
-      });
+    withEmptyPath(() => {
+      assert.equal(
+        dismissTrustPromptIfPresent('omx-team-x', 1, undefined, { ...process.env, OMX_TEAM_AUTO_TRUST: undefined, PATH: '' }),
+        false,
+      );
     });
   });
 });
@@ -1592,27 +1632,21 @@ describe('isWorkerAlive', () => {
 
 describe('isWsl2', () => {
   it('returns true when WSL_DISTRO_NAME is set', async () => {
-    await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
-      assert.equal(isWsl2(), true);
-    });
+    assert.equal(isWsl2({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }), true);
   });
 
   it('returns true when WSL_INTEROP is set and WSL_DISTRO_NAME is absent', async () => {
-    await withEnv({
+    assert.equal(isWsl2({
       WSL_DISTRO_NAME: undefined,
       WSL_INTEROP: '/run/WSL/8_interop',
-    }, async () => {
-      assert.equal(isWsl2(), true);
-    });
+    }), true);
   });
 
   it('returns a boolean without throwing when no WSL env vars are present', async () => {
-    await withEnv({
+    assert.equal(typeof isWsl2({
       WSL_DISTRO_NAME: undefined,
       WSL_INTEROP: undefined,
-    }, async () => {
-      assert.equal(typeof isWsl2(), 'boolean');
-    });
+    }), 'boolean');
   });
 });
 
@@ -1662,12 +1696,10 @@ describe('isNativeWindows', () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      await withEnv({
+      assert.equal(isNativeWindows({
         WSL_DISTRO_NAME: undefined,
         WSL_INTEROP: undefined,
-      }, async () => {
-        assert.equal(isNativeWindows(), true);
-      });
+      }), true);
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
     }
@@ -1677,9 +1709,7 @@ describe('isNativeWindows', () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
-        assert.equal(isNativeWindows(), false);
-      });
+      assert.equal(isNativeWindows({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }), false);
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
     }
@@ -1689,9 +1719,7 @@ describe('isNativeWindows', () => {
     const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
-      await withEnv({ MSYSTEM: 'MINGW64' }, async () => {
-        assert.equal(isNativeWindows(), false);
-      });
+      assert.equal(isNativeWindows({ MSYSTEM: 'MINGW64' }), false);
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
     }
@@ -1736,10 +1764,8 @@ describe('enableMouseScrolling', () => {
   it('returns false in WSL2 environment when tmux is unavailable', async () => {
     // WSL2 path: even with the XT override branch active, the function must
     // return false (not throw) when tmux is not on PATH.
-    await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
-      withEmptyPath(() => {
-        assert.equal(enableMouseScrolling('omx-team-x'), false);
-      });
+    withEmptyPath(() => {
+      assert.equal(enableMouseScrolling('omx-team-x'), false);
     });
   });
 });
@@ -1814,10 +1840,8 @@ describe('enableMouseScrolling scroll and copy setup (issue #206)', () => {
   });
 
   it('does not throw when WSL2 env is set and tmux is unavailable (regression + #206)', async () => {
-    await withEnv({ WSL_DISTRO_NAME: 'Ubuntu-22.04' }, async () => {
-      withEmptyPath(() => {
-        assert.doesNotThrow(() => enableMouseScrolling('omx-team-x'));
-      });
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => enableMouseScrolling('omx-team-x'));
     });
   });
 });

@@ -4,14 +4,10 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { withEnv } from '../../test-support/shared-harness.js';
+import { buildChildEnv } from '../../test-support/shared-harness.js';
 
-async function withAmbientTmuxEnv<T>(env: NodeJS.ProcessEnv, run: () => Promise<T>): Promise<T> {
-  return withEnv({
-    TMUX: env.TMUX,
-    TMUX_PANE: env.TMUX_PANE,
-    PATH: env.PATH,
-  }, run);
+async function loadStateServerModule() {
+  return import(`../state-server.js?disableAutoStart=1&ts=${Date.now()}`);
 }
 
 async function createFakeTmuxBin(wd: string): Promise<string> {
@@ -64,182 +60,170 @@ exit 1
 
 describe('state-server directory initialization', () => {
   it('creates .omx/state for state tools without setup', async () => {
-    await withEnv({ OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }, async () => {
-      const { handleStateToolCall } = await import('../state-server.js');
+    const { handleStateToolCall } = await loadStateServerModule();
 
-      const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
-      try {
-        const stateDir = join(wd, '.omx', 'state');
-        const tmuxHookConfig = join(wd, '.omx', 'tmux-hook.json');
-        assert.equal(existsSync(stateDir), false);
-        assert.equal(existsSync(tmuxHookConfig), false);
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
+    try {
+      const stateDir = join(wd, '.omx', 'state');
+      const tmuxHookConfig = join(wd, '.omx', 'tmux-hook.json');
+      assert.equal(existsSync(stateDir), false);
+      assert.equal(existsSync(tmuxHookConfig), false);
 
-        const response = await handleStateToolCall({
-          params: {
-            name: 'state_list_active',
-            arguments: { workingDirectory: wd },
-          },
-        });
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_list_active',
+          arguments: { workingDirectory: wd },
+        },
+      }, buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }));
 
-        assert.equal(existsSync(stateDir), true);
-        assert.equal(existsSync(tmuxHookConfig), true);
-        assert.deepEqual(
-          JSON.parse(response.content[0]?.text || '{}'),
-          { active_modes: [] },
-        );
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    });
+      assert.equal(existsSync(stateDir), true);
+      assert.equal(existsSync(tmuxHookConfig), true);
+      assert.deepEqual(
+        JSON.parse(response.content[0]?.text || '{}'),
+        { active_modes: [] },
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it('bootstraps state-tool tmux-hook from the current tmux pane when available', async () => {
-    await withEnv({ OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }, async () => {
-      const { handleStateToolCall } = await import('../state-server.js');
+    const { handleStateToolCall } = await loadStateServerModule();
 
-      const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-live-'));
-      try {
-        const tmuxHookConfig = join(wd, '.omx', 'tmux-hook.json');
-        const fakeBin = await createFakeTmuxBin(wd);
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-live-'));
+    try {
+      const tmuxHookConfig = join(wd, '.omx', 'tmux-hook.json');
+      const fakeBin = await createFakeTmuxBin(wd);
 
-        await withAmbientTmuxEnv(
-          {
-            TMUX: '/tmp/maintainer-default,123,0',
-            TMUX_PANE: '%777',
-            PATH: `${fakeBin}:${process.env.PATH || ''}`,
-          },
-          async () => {
-            const response = await handleStateToolCall({
-              params: {
-                name: 'state_list_active',
-                arguments: { workingDirectory: wd },
-              },
-            });
-            assert.deepEqual(JSON.parse(response.content[0]?.text || '{}'), { active_modes: [] });
-          },
-        );
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_list_active',
+          arguments: { workingDirectory: wd },
+        },
+      }, buildChildEnv(wd, {
+        OMX_STATE_SERVER_DISABLE_AUTO_START: '1',
+        TMUX: '/tmp/maintainer-default,123,0',
+        TMUX_PANE: '%777',
+        PATH: `${fakeBin}:${process.env.PATH || ''}`,
+      }));
+      assert.deepEqual(JSON.parse(response.content[0]?.text || '{}'), { active_modes: [] });
 
-        const tmuxConfig = JSON.parse(await readFile(tmuxHookConfig, 'utf-8')) as {
-          target?: { type?: string; value?: string };
-        };
-        assert.deepEqual(tmuxConfig.target, { type: 'pane', value: '%777' });
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    });
+      const tmuxConfig = JSON.parse(await readFile(tmuxHookConfig, 'utf-8')) as {
+        target?: { type?: string; value?: string };
+      };
+      assert.deepEqual(tmuxConfig.target, { type: 'pane', value: '%777' });
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it('writes and reads deep-interview state', async () => {
-    await withEnv({ OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }, async () => {
-      const { handleStateToolCall } = await import('../state-server.js');
+    const { handleStateToolCall } = await loadStateServerModule();
 
-      const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
-      try {
-        const writeResponse = await handleStateToolCall({
-          params: {
-            name: 'state_write',
-            arguments: {
-              workingDirectory: wd,
-              mode: 'deep-interview',
-              active: true,
-              current_phase: 'deep-interview',
-              state: {
-                current_focus: 'intent',
-                threshold: 0.2,
-              },
-            },
-          },
-        });
-
-        assert.equal(writeResponse.isError, undefined);
-        assert.deepEqual(
-          JSON.parse(writeResponse.content[0]?.text || '{}'),
-          {
-            success: true,
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
+    try {
+      const testEnv = buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' });
+      const writeResponse = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
             mode: 'deep-interview',
-            path: join(wd, '.omx', 'state', 'deep-interview-state.json'),
-          },
-        );
-
-        const readResponse = await handleStateToolCall({
-          params: {
-            name: 'state_read',
-            arguments: {
-              workingDirectory: wd,
-              mode: 'deep-interview',
+            active: true,
+            current_phase: 'deep-interview',
+            state: {
+              current_focus: 'intent',
+              threshold: 0.2,
             },
           },
-        });
+        },
+      }, testEnv);
 
-        assert.equal(readResponse.isError, undefined);
-        const readBody = JSON.parse(readResponse.content[0]?.text || '{}') as Record<string, unknown>;
-        assert.equal(readBody.active, true);
-        assert.equal(readBody.current_phase, 'deep-interview');
-        assert.equal(readBody.current_focus, 'intent');
-        assert.equal(readBody.threshold, 0.2);
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    });
+      assert.equal(writeResponse.isError, undefined);
+      assert.deepEqual(
+        JSON.parse(writeResponse.content[0]?.text || '{}'),
+        {
+          success: true,
+          mode: 'deep-interview',
+          path: join(wd, '.omx', 'state', 'deep-interview-state.json'),
+        },
+      );
+
+      const readResponse = await handleStateToolCall({
+        params: {
+          name: 'state_read',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'deep-interview',
+          },
+        },
+      }, testEnv);
+
+      assert.equal(readResponse.isError, undefined);
+      const readBody = JSON.parse(readResponse.content[0]?.text || '{}') as Record<string, unknown>;
+      assert.equal(readBody.active, true);
+      assert.equal(readBody.current_phase, 'deep-interview');
+      assert.equal(readBody.current_focus, 'intent');
+      assert.equal(readBody.threshold, 0.2);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it('creates session-scoped state directory when session_id is provided', async () => {
-    await withEnv({ OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }, async () => {
-      const { handleStateToolCall } = await import('../state-server.js');
+    const { handleStateToolCall } = await loadStateServerModule();
 
-      const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
-      try {
-        const sessionDir = join(wd, '.omx', 'state', 'sessions', 'sess1');
-        assert.equal(existsSync(sessionDir), false);
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
+    try {
+      const sessionDir = join(wd, '.omx', 'state', 'sessions', 'sess1');
+      assert.equal(existsSync(sessionDir), false);
 
-        const response = await handleStateToolCall({
-          params: {
-            name: 'state_get_status',
-            arguments: { workingDirectory: wd, session_id: 'sess1' },
-          },
-        });
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_get_status',
+          arguments: { workingDirectory: wd, session_id: 'sess1' },
+        },
+      }, buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }));
 
-        assert.equal(existsSync(sessionDir), true);
-        assert.deepEqual(
-          JSON.parse(response.content[0]?.text || '{}'),
-          { statuses: {} },
-        );
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    });
+      assert.equal(existsSync(sessionDir), true);
+      assert.deepEqual(
+        JSON.parse(response.content[0]?.text || '{}'),
+        { statuses: {} },
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it('serializes concurrent state_write calls per mode file and preserves merged fields', async () => {
-    await withEnv({ OMX_STATE_SERVER_DISABLE_AUTO_START: '1' }, async () => {
-      const { handleStateToolCall } = await import('../state-server.js');
+    const { handleStateToolCall } = await loadStateServerModule();
 
-      const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
-      try {
-        const writes = Array.from({ length: 16 }, (_, i) => handleStateToolCall({
-          params: {
-            name: 'state_write',
-            arguments: {
-              workingDirectory: wd,
-              mode: 'team',
-              state: { [`k${i}`]: i },
-            },
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
+    try {
+      const testEnv = buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' });
+      const writes = Array.from({ length: 16 }, (_, i) => handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'team',
+            state: { [`k${i}`]: i },
           },
-        }));
+        },
+      }, testEnv));
 
-        const responses = await Promise.all(writes);
-        for (const response of responses) {
-          assert.equal(response.isError, undefined);
-        }
-
-        const filePath = join(wd, '.omx', 'state', 'team-state.json');
-        const state = JSON.parse(await readFile(filePath, 'utf-8')) as Record<string, unknown>;
-        for (let i = 0; i < 16; i++) {
-          assert.equal(state[`k${i}`], i);
-        }
-      } finally {
-        await rm(wd, { recursive: true, force: true });
+      const responses = await Promise.all(writes);
+      for (const response of responses) {
+        assert.equal(response.isError, undefined);
       }
-    });
+
+      const filePath = join(wd, '.omx', 'state', 'team-state.json');
+      const state = JSON.parse(await readFile(filePath, 'utf-8')) as Record<string, unknown>;
+      for (let i = 0; i < 16; i++) {
+        assert.equal(state[`k${i}`], i);
+      }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 });

@@ -362,15 +362,15 @@ export async function loadExplorePrompt(parsed: ParsedExploreArgs): Promise<stri
   return trimmed;
 }
 
-export async function exploreCommand(args: string[]): Promise<void> {
+export async function exploreCommand(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const childEnv = buildChildEnv(process.cwd(), {
-    CODEX_HOME: process.env.CODEX_HOME,
-    OMX_EXPLORE_BIN: process.env.OMX_EXPLORE_BIN,
-    OMX_SPARKSHELL_BIN: process.env.OMX_SPARKSHELL_BIN,
-    OMX_EXPLORE_SPARK_MODEL: process.env.OMX_EXPLORE_SPARK_MODEL,
-    OMX_EXPLORE_CODEX_BIN: process.env.OMX_EXPLORE_CODEX_BIN,
-    OMX_NATIVE_MANIFEST_URL: process.env.OMX_NATIVE_MANIFEST_URL,
-    OMX_NATIVE_CACHE_DIR: process.env.OMX_NATIVE_CACHE_DIR,
+    CODEX_HOME: env.CODEX_HOME,
+    OMX_EXPLORE_BIN: env.OMX_EXPLORE_BIN,
+    OMX_SPARKSHELL_BIN: env.OMX_SPARKSHELL_BIN,
+    OMX_EXPLORE_SPARK_MODEL: env.OMX_EXPLORE_SPARK_MODEL,
+    OMX_EXPLORE_CODEX_BIN: env.OMX_EXPLORE_CODEX_BIN,
+    OMX_NATIVE_MANIFEST_URL: env.OMX_NATIVE_MANIFEST_URL,
+    OMX_NATIVE_CACHE_DIR: env.OMX_NATIVE_CACHE_DIR,
   });
   const parsed = parseExploreArgs(args);
   const prompt = await loadExplorePrompt(parsed);

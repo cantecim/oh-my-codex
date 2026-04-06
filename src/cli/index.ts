@@ -790,7 +790,7 @@ async function reasoningCommand(args: string[]): Promise<void> {
   console.log(`Set ${REASONING_KEY}="${mode}" in ${configPath}`);
 }
 
-export async function launchWithHud(args: string[]): Promise<void> {
+export async function launchWithHud(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (isNativeWindows()) {
     const { result } = spawnPlatformCommandSync("tmux", ["-V"], {
       encoding: "utf-8",
@@ -823,11 +823,11 @@ export async function launchWithHud(args: string[]): Promise<void> {
   const parsedWorktree = parseWorktreeMode(args);
   const notifyTempResult = resolveNotifyTempContract(
     parsedWorktree.remainingArgs,
-    process.env,
+    env,
   );
-  const codexHomeOverride = resolveCodexHomeForLaunch(launchCwd, process.env);
+  const codexHomeOverride = resolveCodexHomeForLaunch(launchCwd, env);
   const launchPolicy = resolveCodexLaunchPolicy(
-    process.env,
+    env,
     process.platform,
     undefined,
     isNativeWindows(),
