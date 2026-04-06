@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { readModeState } from '../../modes/base.js';
 import { runRalplanConsensus } from '../runtime.js';
 
-describe.skip('ralplan runtime BMAD contract', () => {
+describe('ralplan runtime BMAD contract', () => {
   it('annotates ralplan state with BMAD readiness metadata when BMAD artifacts exist', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-ralplan-runtime-bmad-'));
     const sessionId = 'sess-ralplan-bmad';

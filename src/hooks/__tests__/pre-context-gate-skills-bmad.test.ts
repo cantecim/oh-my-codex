@@ -10,7 +10,7 @@ const autopilotSkill = readFileSync(
   'utf-8',
 );
 
-describe.skip('pre-context gate BMAD skill contract', () => {
+describe('pre-context gate BMAD skill contract', () => {
   it('autopilot documents BMAD routing before the standard non-BMAD phase stack', () => {
     const routingIndex = autopilotSkill.indexOf('BMAD routing gate');
     const expansionIndex = autopilotSkill.indexOf('Phase 0 - Expansion (non-BMAD path)');

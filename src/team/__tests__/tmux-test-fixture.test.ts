@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, type TestContext } from 'node:test';
+import { describe, it } from 'node:test';
 import {
   ambientTmuxSessionExists,
   isRealTmuxAvailable,
@@ -8,12 +8,8 @@ import {
   withTempTmuxSession,
 } from './tmux-test-fixture.js';
 
-function skipUnlessTmux(t: TestContext): boolean {
-  if (!isRealTmuxAvailable()) {
-    t.skip('tmux is not available in this environment');
-    return true;
-  }
-  return false;
+function requireRealTmux(): void {
+  assert.equal(isRealTmuxAvailable(), true, 'tmux is required for tmux-test-fixture integration tests');
 }
 
 function uniqueAmbientSessionName(): string {
@@ -21,8 +17,8 @@ function uniqueAmbientSessionName(): string {
 }
 
 describe('withTempTmuxSession', () => {
-  it('provides isolated tmux env and cleans up on success', async (t) => {
-    if (skipUnlessTmux(t)) return;
+  it('provides isolated tmux env and cleans up on success', async () => {
+    requireRealTmux();
     const ambientTmux = process.env.TMUX;
     const ambientTmuxPane = process.env.TMUX_PANE;
     let sessionName = '';
@@ -63,8 +59,8 @@ describe('withTempTmuxSession', () => {
     assert.equal(process.env.TMUX_PANE, ambientTmuxPane);
   });
 
-  it('cleans up when the callback throws', async (t) => {
-    if (skipUnlessTmux(t)) return;
+  it('cleans up when the callback throws', async () => {
+    requireRealTmux();
     let sessionName = '';
     let serverName = '';
 
@@ -80,8 +76,8 @@ describe('withTempTmuxSession', () => {
     assert.equal(tmuxSessionExists(sessionName, serverName), false);
   });
 
-  it('keeps ambient default-server sessions untouched by default', async (t) => {
-    if (skipUnlessTmux(t)) return;
+  it('keeps ambient default-server sessions untouched by default', async () => {
+    requireRealTmux();
     const ambientSessionName = uniqueAmbientSessionName();
     const created = runAmbientTmux([
       'new-session',
@@ -110,8 +106,8 @@ describe('withTempTmuxSession', () => {
     }
   });
 
-  it('only uses the ambient server when a test explicitly opts in', async (t) => {
-    if (skipUnlessTmux(t)) return;
+  it('only uses the ambient server when a test explicitly opts in', async () => {
+    requireRealTmux();
     let sessionName = '';
 
     await withTempTmuxSession({ useAmbientServer: true }, async (fixture) => {

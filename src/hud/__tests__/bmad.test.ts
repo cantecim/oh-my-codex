@@ -31,7 +31,7 @@ async function writeModeState(cwd: string, mode: string, state: unknown): Promis
   await writeFile(join(stateDir, `${mode}-state.json`), JSON.stringify(state));
 }
 
-describe.skip('HUD BMAD contract', () => {
+describe('HUD BMAD contract', () => {
   it('renders BMAD campaign autopilot with the active story slug', () => {
     const ctx = {
       ...emptyCtx(),

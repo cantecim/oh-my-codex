@@ -18,7 +18,7 @@ const bmadContext: BmadExecutionContext = {
   writebackBlockedByDrift: false,
 };
 
-describe.skip('ralph BMAD contract', () => {
+describe('ralph BMAD contract', () => {
   it('includes BMAD story context and bounded writeback guidance when available', () => {
     const instructions = buildRalphAppendInstructions('Implement BMAD story', {
       changedFilesPath: '.omx/ralph/changed-files.txt',

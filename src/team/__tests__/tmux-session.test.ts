@@ -1432,47 +1432,6 @@ esac
     );
   });
 
-  it.skip('waitForWorkerReady auto-accepts the Claude bypass prompt', async () => {
-    await withMockTmuxFixture(
-      'omx-tmux-claude-bypass-ready-',
-      (logPath) => `#!/bin/sh
-set -eu
-state_dir="$(dirname "${logPath}")"
-accepted_file="$state_dir/accepted"
-printf '%s\n' "$*" >> "${logPath}"
-case "$1" in
-  capture-pane)
-    if [ -f "$accepted_file" ]; then
-      cat <<'EOF'
-${READY_HELPER_CAPTURE}
-EOF
-    else
-      cat <<'EOF'
-${CLAUDE_BYPASS_PROMPT_CAPTURE}
-EOF
-    fi
-    exit 0
-    ;;
-  send-keys)
-    if [ "\${4:-}" = "-l" ] && [ "\${6:-}" = "2" ]; then
-      : > "$accepted_file"
-    fi
-    exit 0
-    ;;
-  *)
-    exit 0
-    ;;
-esac
-`,
-      async ({ logPath }) => {
-        assert.equal(waitForWorkerReady('omx-team-x', 1, 1_000), true);
-        const log = await readFile(logPath, 'utf-8');
-        assert.match(log, /send-keys -t omx-team-x:1 -l -- 2/);
-        assert.match(log, /send-keys -t omx-team-x:1 C-m/);
-      },
-    );
-  });
-
   it('waitForWorkerReady auto-accepts the Claude bypass prompt (isolated subprocess)', async () => {
     const previousAutoAccept = process.env.OMX_TEAM_AUTO_ACCEPT_BYPASS;
     process.env.OMX_TEAM_AUTO_ACCEPT_BYPASS = '1';

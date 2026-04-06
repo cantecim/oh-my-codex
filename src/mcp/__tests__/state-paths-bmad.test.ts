@@ -11,7 +11,7 @@ import {
   getBmadDriftLogPath,
 } from '../state-paths.js';
 
-describe.skip('state paths BMAD contract', () => {
+describe('state paths BMAD contract', () => {
   it('builds integration and BMAD state paths', () => {
     const base = getBaseStateDir('/repo');
     assert.equal(base, '/repo/.omx/state');
