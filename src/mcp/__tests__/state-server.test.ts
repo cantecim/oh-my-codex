@@ -60,7 +60,7 @@ exit 1
 
 describe('state-server directory initialization', () => {
   it('creates .omx/state for state tools without setup', async () => {
-    const { handleStateToolCall } = await loadStateServerModule();
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
 
     const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
     try {
@@ -69,7 +69,7 @@ describe('state-server directory initialization', () => {
       assert.equal(existsSync(stateDir), false);
       assert.equal(existsSync(tmuxHookConfig), false);
 
-      const response = await handleStateToolCall({
+      const response = await handleStateToolCallWithEnv({
         params: {
           name: 'state_list_active',
           arguments: { workingDirectory: wd },
@@ -88,14 +88,14 @@ describe('state-server directory initialization', () => {
   });
 
   it('bootstraps state-tool tmux-hook from the current tmux pane when available', async () => {
-    const { handleStateToolCall } = await loadStateServerModule();
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
 
     const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-live-'));
     try {
       const tmuxHookConfig = join(wd, '.omx', 'tmux-hook.json');
       const fakeBin = await createFakeTmuxBin(wd);
 
-      const response = await handleStateToolCall({
+      const response = await handleStateToolCallWithEnv({
         params: {
           name: 'state_list_active',
           arguments: { workingDirectory: wd },
@@ -118,12 +118,12 @@ describe('state-server directory initialization', () => {
   });
 
   it('writes and reads deep-interview state', async () => {
-    const { handleStateToolCall } = await loadStateServerModule();
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
 
     const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
     try {
       const testEnv = buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' });
-      const writeResponse = await handleStateToolCall({
+      const writeResponse = await handleStateToolCallWithEnv({
         params: {
           name: 'state_write',
           arguments: {
@@ -149,7 +149,7 @@ describe('state-server directory initialization', () => {
         },
       );
 
-      const readResponse = await handleStateToolCall({
+      const readResponse = await handleStateToolCallWithEnv({
         params: {
           name: 'state_read',
           arguments: {
@@ -171,14 +171,14 @@ describe('state-server directory initialization', () => {
   });
 
   it('creates session-scoped state directory when session_id is provided', async () => {
-    const { handleStateToolCall } = await loadStateServerModule();
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
 
     const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
     try {
       const sessionDir = join(wd, '.omx', 'state', 'sessions', 'sess1');
       assert.equal(existsSync(sessionDir), false);
 
-      const response = await handleStateToolCall({
+      const response = await handleStateToolCallWithEnv({
         params: {
           name: 'state_get_status',
           arguments: { workingDirectory: wd, session_id: 'sess1' },
@@ -196,12 +196,12 @@ describe('state-server directory initialization', () => {
   });
 
   it('serializes concurrent state_write calls per mode file and preserves merged fields', async () => {
-    const { handleStateToolCall } = await loadStateServerModule();
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
 
     const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-test-'));
     try {
       const testEnv = buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' });
-      const writes = Array.from({ length: 16 }, (_, i) => handleStateToolCall({
+      const writes = Array.from({ length: 16 }, (_, i) => handleStateToolCallWithEnv({
         params: {
           name: 'state_write',
           arguments: {

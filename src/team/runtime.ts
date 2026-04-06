@@ -1302,7 +1302,7 @@ export async function startTeam(
   const workerLaunchMode = resolveTeamWorkerLaunchMode(leaderEnvSnapshot);
   const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
   if (workerLaunchMode === 'interactive') {
-    if (!isTmuxAvailable()) {
+    if (!isTmuxAvailable(leaderEnvSnapshot)) {
       throw new Error('Team mode requires tmux. Install with: apt install tmux / brew install tmux');
     }
     if (!leaderEnvSnapshot.TMUX) {

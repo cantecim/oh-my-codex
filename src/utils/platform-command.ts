@@ -206,7 +206,9 @@ export function spawnPlatformCommandSync(
   spawnImpl: SpawnSyncLike = spawnSync,
 ): ProbedPlatformCommand {
   const spec = buildPlatformCommandSpec(command, args, platform, env, existsImpl);
-  const baseOptions = platform === 'win32' ? { ...options, windowsHide: true } : options;
+  const baseOptions = platform === 'win32'
+    ? { ...options, env, windowsHide: true }
+    : { ...options, env };
   const spawnOptions = shouldUseWindowsVerbatimArguments(platform, spec)
     ? { ...baseOptions, windowsVerbatimArguments: true }
     : baseOptions;

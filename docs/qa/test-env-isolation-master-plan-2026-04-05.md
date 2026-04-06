@@ -423,7 +423,7 @@ Her pass sonunda:
 
 Program final acceptance'ta ayrıca:
 
-1. `applyTmuxEnv` ve benzeri helper-level env restore / ambient-read residual'ları final sweep'te ayrıca gündeme getirilir; kapanmadan önce kullanıcı açıkça uyarılır.
+1. none
 
 Drift özel notu:
 

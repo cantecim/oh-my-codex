@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { toLegacyDisplayPath } from '../utils/display-path.js';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { updateModeState, startMode, readModeState } from '../modes/base.js';
 import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime, type TeamSnapshot } from '../team/runtime.js';
 import { DEFAULT_MAX_WORKERS } from '../team/state.js';
@@ -617,7 +616,6 @@ async function readTeamPaneStatus(
     command: string;
   }>;
 }> {
-  const displayCwd = toLegacyDisplayPath(cwd);
   if (!config) {
     return {
       leader_pane_id: null,
@@ -789,13 +787,13 @@ async function readTeamPaneStatus(
   const recommendedInspectWorktreePaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = config.workers.find((candidate) => candidate.name === target);
-      return [target, worker?.worktree_path ?? null];
+      return [target, canonicalizeInspectablePathOrNull(worker?.worktree_path ?? null)];
     }),
   );
   const recommendedInspectWorktreeRepoRoots = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = config.workers.find((candidate) => candidate.name === target);
-      return [target, worker?.worktree_repo_root ?? null];
+      return [target, canonicalizeInspectablePathOrNull(worker?.worktree_repo_root ?? null)];
     }),
   );
   const recommendedInspectWorktreeBranches = Object.fromEntries(
@@ -819,13 +817,13 @@ async function readTeamPaneStatus(
   const recommendedInspectTeamStateRoots = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = config.workers.find((candidate) => candidate.name === target);
-      return [target, worker?.team_state_root ?? null];
+      return [target, canonicalizeInspectablePathOrNull(worker?.team_state_root ?? null)];
     }),
   );
   const recommendedInspectWorkdirs = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const worker = config.workers.find((candidate) => candidate.name === target);
-      return [target, worker?.working_dir ?? worker?.worktree_path ?? null];
+      return [target, canonicalizeInspectablePathOrNull(worker?.working_dir ?? worker?.worktree_path ?? null)];
     }),
   );
   const recommendedInspectAssignedTasks = Object.fromEntries(
@@ -921,7 +919,9 @@ async function readTeamPaneStatus(
   const recommendedInspectTaskClaimLockPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const taskId = recommendedInspectTasks[target];
-      return [target, taskId && snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'claims', `task-${taskId}.lock`) : null];
+      return [target, taskId && snapshot?.teamName
+        ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'claims', `task-${taskId}.lock`))
+        : null];
     }),
   );
   const recommendedInspectRequiresCodeChange = Object.fromEntries(
@@ -1011,109 +1011,113 @@ async function readTeamPaneStatus(
   const recommendedInspectTaskPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const taskId = recommendedInspectTasks[target];
-      return [target, taskId && snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'tasks', `task-${taskId}.json`) : null];
+      return [target, taskId && snapshot?.teamName
+        ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'tasks', `task-${taskId}.json`))
+        : null];
     }),
   );
   const recommendedInspectApprovalPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => {
       const taskId = recommendedInspectTasks[target];
-      return [target, taskId && snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'approvals', `task-${taskId}.json`) : null];
+      return [target, taskId && snapshot?.teamName
+        ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'approvals', `task-${taskId}.json`))
+        : null];
     }),
   );
   const recommendedInspectWorkerStateDirs = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target) : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target)) : null,
     ]),
   );
   const recommendedInspectWorkerStatusPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'status.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'status.json')) : null,
     ]),
   );
   const recommendedInspectWorkerHeartbeatPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'heartbeat.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'heartbeat.json')) : null,
     ]),
   );
   const recommendedInspectWorkerIdentityPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'identity.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'identity.json')) : null,
     ]),
   );
   const recommendedInspectWorkerInboxPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'inbox.md') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'inbox.md')) : null,
     ]),
   );
   const recommendedInspectWorkerMailboxPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'mailbox', `${target}.json`) : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'mailbox', `${target}.json`)) : null,
     ]),
   );
   const recommendedInspectWorkerShutdownRequestPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-request.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-request.json')) : null,
     ]),
   );
   const recommendedInspectWorkerShutdownAckPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-ack.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'workers', target, 'shutdown-ack.json')) : null,
     ]),
   );
   const recommendedInspectTeamConfigPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'config.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'config.json')) : null,
     ]),
   );
   const recommendedInspectTeamManifestPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'manifest.v2.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'manifest.v2.json')) : null,
     ]),
   );
   const recommendedInspectTeamEventsPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'events', 'events.ndjson') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'events', 'events.ndjson')) : null,
     ]),
   );
   const recommendedInspectTeamDispatchPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'dispatch', 'requests.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'dispatch', 'requests.json')) : null,
     ]),
   );
   const recommendedInspectTeamDirPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName) : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName)) : null,
     ]),
   );
   const recommendedInspectTeamPhasePaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'phase.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'phase.json')) : null,
     ]),
   );
   const recommendedInspectTeamMonitorSnapshotPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'monitor-snapshot.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'monitor-snapshot.json')) : null,
     ]),
   );
   const recommendedInspectTeamSummarySnapshotPaths = Object.fromEntries(
     recommendedInspectTargets.map((target) => [
       target,
-      snapshot?.teamName ? join(displayCwd, '.omx', 'state', 'team', snapshot.teamName, 'summary-snapshot.json') : null,
+      snapshot?.teamName ? canonicalizeInspectablePath(join(cwd, '.omx', 'state', 'team', snapshot.teamName, 'summary-snapshot.json')) : null,
     ]),
   );
   const recommendedInspectStates = Object.fromEntries(
@@ -2205,6 +2209,19 @@ function buildLeaderEnvSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.en
     OMX_GEMINI_ARGV_CAPTURE_PATH: env.OMX_GEMINI_ARGV_CAPTURE_PATH,
     OMX_TEST_LOG_DIR: env.OMX_TEST_LOG_DIR,
   });
+}
+
+function canonicalizeInspectablePath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function canonicalizeInspectablePathOrNull(path: string | null | undefined): string | null {
+  if (typeof path !== 'string' || path.trim() === '') return null;
+  return canonicalizeInspectablePath(path);
 }
 
 export async function teamCommand(args: string[], _options: TeamCliOptions = {}): Promise<void> {

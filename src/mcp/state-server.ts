@@ -209,7 +209,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 	tools: buildStateServerTools(),
 }));
 
-export async function handleStateToolCall(request: {
+export async function handleStateToolCallWithEnv(request: {
 	params: { name: string; arguments?: Record<string, unknown> };
 }, env: NodeJS.ProcessEnv = process.env) {
 	const { name, arguments: args } = request.params;
@@ -525,7 +525,14 @@ export async function handleStateToolCall(request: {
 		};
 	}
 }
-server.setRequestHandler(CallToolRequestSchema, handleStateToolCall);
+
+export async function handleStateToolCall(request: {
+	params: { name: string; arguments?: Record<string, unknown> };
+}) {
+	return handleStateToolCallWithEnv(request, process.env);
+}
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => handleStateToolCall(request));
 
 // Start server
 if (!shouldDisableStateServerAutoStartForModule(import.meta.url)) {

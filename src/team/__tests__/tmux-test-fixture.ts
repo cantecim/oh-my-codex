@@ -3,11 +3,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-interface TmuxEnvSnapshot {
-  TMUX?: string;
-  TMUX_PANE?: string;
-}
-
 export interface TempTmuxSessionFixture {
   sessionName: string;
   serverName: string;
@@ -24,21 +19,6 @@ export interface TempTmuxSessionFixture {
 
 export interface TempTmuxSessionOptions {
   useAmbientServer?: boolean;
-}
-
-function snapshotTmuxEnv(source: NodeJS.ProcessEnv = process.env): TmuxEnvSnapshot {
-  return {
-    TMUX: typeof source.TMUX === 'string' ? source.TMUX : undefined,
-    TMUX_PANE: typeof source.TMUX_PANE === 'string' ? source.TMUX_PANE : undefined,
-  };
-}
-
-function applyTmuxEnv(snapshot: TmuxEnvSnapshot): void {
-  for (const key of ['TMUX', 'TMUX_PANE'] as const) {
-    const value = snapshot[key];
-    if (typeof value === 'string') process.env[key] = value;
-    else delete process.env[key];
-  }
 }
 
 function scrubTmuxEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -110,7 +90,6 @@ export async function withTempTmuxSession<T>(
     throw new Error('withTempTmuxSession requires a callback');
   }
 
-  const previousEnv = snapshotTmuxEnv(process.env);
   const fixtureCwd = await mkdtemp(join(tmpdir(), 'omx-tmux-fixture-'));
   const sessionName = uniqueTmuxIdentifier('omx-test');
   const serverName = options.useAmbientServer ? '' : uniqueTmuxIdentifier('omx-fixture');
@@ -146,8 +125,7 @@ export async function withTempTmuxSession<T>(
   const fixtureEnv = {
     TMUX: `${socketPath},${process.pid},0`,
     TMUX_PANE: leaderPaneId,
-  } satisfies Required<TmuxEnvSnapshot>;
-  applyTmuxEnv(fixtureEnv);
+  } satisfies { TMUX: string; TMUX_PANE: string };
 
   const fixture: TempTmuxSessionFixture = {
     sessionName,
@@ -173,7 +151,6 @@ export async function withTempTmuxSession<T>(
         runTmux(['kill-session', '-t', sessionName], tmuxOptions);
       }
     } catch {}
-    applyTmuxEnv(previousEnv);
     await rm(fixtureCwd, { recursive: true, force: true });
   }
 }

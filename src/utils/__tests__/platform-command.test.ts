@@ -163,7 +163,7 @@ describe('spawnPlatformCommandSync', () => {
       const calls: Array<{
         command: string;
         args: readonly string[];
-        options?: { windowsVerbatimArguments?: boolean };
+        options?: { env?: NodeJS.ProcessEnv; windowsVerbatimArguments?: boolean };
       }> = [];
 
       const probed = spawnPlatformCommandSync(
@@ -195,6 +195,7 @@ describe('spawnPlatformCommandSync', () => {
       assert.equal(calls[0]?.command, 'C:\\Windows\\System32\\cmd.exe');
       assert.match((calls[0]?.args[3] || ''), /codex\.cmd/i);
       assert.equal(calls[0]?.options?.windowsVerbatimArguments, true);
+      assert.equal(calls[0]?.options?.env?.PATH, fakeBin);
     } finally {
       await rm(fakeBin, { recursive: true, force: true });
     }
@@ -208,7 +209,7 @@ describe('spawnPlatformCommandSync', () => {
       const calls: Array<{
         command: string;
         args: readonly string[];
-        options?: { windowsVerbatimArguments?: boolean };
+        options?: { env?: NodeJS.ProcessEnv; windowsVerbatimArguments?: boolean };
       }> = [];
 
       spawnPlatformCommandSync(
@@ -237,6 +238,7 @@ describe('spawnPlatformCommandSync', () => {
       assert.equal(calls.length, 1);
       assert.equal(calls[0]?.command, exePath);
       assert.equal(calls[0]?.options?.windowsVerbatimArguments, undefined);
+      assert.equal(calls[0]?.options?.env?.PATH, fakeBin);
     } finally {
       await rm(fakeBin, { recursive: true, force: true });
     }
@@ -273,17 +275,18 @@ describe('spawnPlatformCommandSync', () => {
 
   it('retries blocked node-hosted scripts through process.execPath on non-Windows', () => {
     const scriptPath = '/tmp/omx-explore-stub.js';
-    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const env = { PATH: '/tmp/fake-bin', OMX_TEST_FLAG: '1' } as NodeJS.ProcessEnv;
+    const calls: Array<{ command: string; args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
 
     const probed = spawnPlatformCommandSync(
       scriptPath,
       ['--prompt', 'find auth'],
       { encoding: 'utf-8' },
       'linux',
-      process.env,
+      env,
       undefined,
-      (((command: string, args: readonly string[]) => {
-        calls.push({ command, args });
+      (((command: string, args: readonly string[], options?: { env?: NodeJS.ProcessEnv }) => {
+        calls.push({ command, args, env: options?.env });
         if (calls.length === 1) {
           return {
             status: 0,
@@ -310,6 +313,8 @@ describe('spawnPlatformCommandSync', () => {
     assert.equal(calls[0]?.command, scriptPath);
     assert.equal(calls[1]?.command, process.execPath);
     assert.deepEqual(calls[1]?.args, [scriptPath, '--prompt', 'find auth']);
+    assert.equal(calls[0]?.env?.OMX_TEST_FLAG, '1');
+    assert.equal(calls[1]?.env?.OMX_TEST_FLAG, '1');
     assert.equal(probed.result.stdout, '# Answer\nReady\n');
     assert.equal(probed.spec.command, process.execPath);
   });

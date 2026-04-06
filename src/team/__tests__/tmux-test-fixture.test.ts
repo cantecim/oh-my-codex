@@ -49,8 +49,8 @@ describe('withTempTmuxSession', () => {
       assert.match(fixture.sessionName, /^omx-test-/);
       assert.equal(fixture.serverKind, 'synthetic');
       assert.match(fixture.serverName, /^omx-fixture-/);
-      assert.equal(process.env.TMUX, fixture.env.TMUX);
-      assert.equal(process.env.TMUX_PANE, fixture.leaderPaneId);
+      assert.equal(process.env.TMUX, ambientTmux);
+      assert.equal(process.env.TMUX_PANE, ambientTmuxPane);
       assert.equal(fixture.sessionExists(), true);
       assert.equal(
         tmuxSessionExists(fixture.sessionName),
