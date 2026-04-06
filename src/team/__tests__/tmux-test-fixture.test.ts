@@ -1,7 +1,12 @@
-import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { describe, it, type TestContext } from 'node:test';
-import { isRealTmuxAvailable, tmuxSessionExists, withTempTmuxSession } from './tmux-test-fixture.js';
+import {
+  ambientTmuxSessionExists,
+  isRealTmuxAvailable,
+  runAmbientTmux,
+  tmuxSessionExists,
+  withTempTmuxSession,
+} from './tmux-test-fixture.js';
 
 function skipUnlessTmux(t: TestContext): boolean {
   if (!isRealTmuxAvailable()) {
@@ -9,26 +14,6 @@ function skipUnlessTmux(t: TestContext): boolean {
     return true;
   }
   return false;
-}
-
-function runAmbientTmux(args: string[]): string {
-  return execFileSync('tmux', args, {
-    encoding: 'utf-8',
-    env: {
-      ...process.env,
-      TMUX: undefined,
-      TMUX_PANE: undefined,
-    },
-  }).trim();
-}
-
-function ambientSessionExists(sessionName: string): boolean {
-  try {
-    runAmbientTmux(['has-session', '-t', sessionName]);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function uniqueAmbientSessionName(): string {
@@ -114,10 +99,10 @@ describe('withTempTmuxSession', () => {
       await withTempTmuxSession(async (fixture) => {
         assert.equal(fixture.serverKind, 'synthetic');
         assert.equal(fixture.sessionExists(ambientSessionName), false);
-        assert.equal(ambientSessionExists(ambientSessionName), true);
+        assert.equal(ambientTmuxSessionExists(ambientSessionName), true);
       });
 
-      assert.equal(ambientSessionExists(ambientSessionName), true);
+      assert.equal(ambientTmuxSessionExists(ambientSessionName), true);
     } finally {
       try {
         runAmbientTmux(['kill-session', '-t', ambientSessionName]);
@@ -133,10 +118,10 @@ describe('withTempTmuxSession', () => {
       sessionName = fixture.sessionName;
       assert.equal(fixture.serverKind, 'ambient');
       assert.equal(fixture.serverName, '');
-      assert.equal(ambientSessionExists(fixture.sessionName), true);
+      assert.equal(ambientTmuxSessionExists(fixture.sessionName), true);
       assert.equal(fixture.sessionExists(), true);
     });
 
-    assert.equal(ambientSessionExists(sessionName), false);
+    assert.equal(ambientTmuxSessionExists(sessionName), false);
   });
 });

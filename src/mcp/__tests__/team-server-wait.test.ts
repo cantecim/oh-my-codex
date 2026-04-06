@@ -1,28 +1,27 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initTeamState, appendTeamEvent } from "../../team/state.js";
 import { withEnv, withTempHome } from "../../test-support/shared-harness.js";
 
-function getOmxJobsDir(): string {
-  return join(homedir(), ".omx", "team-jobs");
+function getOmxJobsDir(homeDir: string): string {
+  return join(homeDir, ".omx", "team-jobs");
 }
 
 async function writeJobFiles(
+  jobsDir: string,
   jobId: string,
   job: Record<string, unknown>,
   panes: { paneIds: string[]; leaderPaneId: string },
 ): Promise<void> {
-  const jobsDir = getOmxJobsDir();
   await mkdir(jobsDir, { recursive: true });
   await writeFile(join(jobsDir, `${jobId}.json`), JSON.stringify(job));
   await writeFile(join(jobsDir, `${jobId}-panes.json`), JSON.stringify(panes));
 }
 
-async function cleanupJobFiles(jobId: string): Promise<void> {
-  const jobsDir = getOmxJobsDir();
+async function cleanupJobFiles(jobsDir: string, jobId: string): Promise<void> {
   await rm(join(jobsDir, `${jobId}.json`), { force: true });
   await rm(join(jobsDir, `${jobId}-panes.json`), { force: true });
 }
@@ -34,20 +33,26 @@ async function loadTeamServer() {
   );
 }
 
-async function withSyntheticHome<T>(run: () => Promise<T>): Promise<T> {
+async function withSyntheticHome<T>(run: (ctx: { homeDir: string; jobsDir: string }) => Promise<T>): Promise<T> {
   return withTempHome("omx-team-home-", async (tempHome) => {
-    return await withEnv({ HOME: tempHome }, run);
+    return await withEnv({ HOME: tempHome }, async () => {
+      return await run({
+        homeDir: tempHome,
+        jobsDir: getOmxJobsDir(tempHome),
+      });
+    });
   });
 }
 
 describe("team-server wait semantics", () => {
   it("keeps default terminal semantics unchanged when wake_on is omitted", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const cwd = await mkdtemp(join(tmpdir(), "omx-team-wait-default-"));
       const jobId = `omx-${Date.now().toString(36)}`;
       try {
         await initTeamState("wait-default", "task", "executor", 1, cwd);
         await writeJobFiles(
+          jobsDir,
           jobId,
           {
             status: "completed",
@@ -77,14 +82,14 @@ describe("team-server wait semantics", () => {
         assert.equal(payload.status, "completed");
         assert.equal(payload.result?.ok, true);
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
         await rm(cwd, { recursive: true, force: true });
       }
     });
   });
 
   it("returns next event with cursor in wake_on=event mode", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const cwd = await mkdtemp(join(tmpdir(), "omx-team-wait-event-"));
       const jobId = `omx-${Date.now().toString(36)}`;
       try {
@@ -111,6 +116,7 @@ describe("team-server wait semantics", () => {
         );
 
         await writeJobFiles(
+          jobsDir,
           jobId,
           {
             status: "running",
@@ -156,14 +162,14 @@ describe("team-server wait semantics", () => {
         assert.equal(payload.event?.state, "blocked");
         assert.equal(payload.event?.prev_state, "working");
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
         await rm(cwd, { recursive: true, force: true });
       }
     });
   });
 
   it("normalizes legacy worker_idle events in wake_on=event mode", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const cwd = await mkdtemp(join(tmpdir(), "omx-team-wait-legacy-"));
       const jobId = `omx-${Date.now().toString(36)}`;
       try {
@@ -189,6 +195,7 @@ describe("team-server wait semantics", () => {
         );
 
         await writeJobFiles(
+          jobsDir,
           jobId,
           {
             status: "running",
@@ -231,7 +238,7 @@ describe("team-server wait semantics", () => {
         assert.equal(payload.event?.state, "idle");
         assert.equal(payload.event?.prev_state, "working");
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
         await rm(cwd, { recursive: true, force: true });
       }
     });

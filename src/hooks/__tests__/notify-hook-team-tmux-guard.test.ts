@@ -9,13 +9,6 @@ import {
   buildFakeTmuxScript,
 } from '../../test-support/shared-harness.js';
 
-function buildFakeTmux(
-  tmuxLogPath: string,
-  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
-): string {
-  return buildFakeTmuxScript(tmuxLogPath, options);
-}
-
 function runSendPaneInputInChild(params: {
   cwd: string;
   fakeBinDir: string;
@@ -55,7 +48,7 @@ describe('notify-hook team tmux guard bridge', () => {
 
     try {
       await mkdir(fakeBinDir, { recursive: true });
-      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmuxScript(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
       const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;
@@ -92,7 +85,7 @@ describe('notify-hook team tmux guard bridge', () => {
 
     try {
       await mkdir(fakeBinDir, { recursive: true });
-      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmuxScript(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
       const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;

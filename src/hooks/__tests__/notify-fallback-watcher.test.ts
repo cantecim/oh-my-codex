@@ -11,6 +11,7 @@ import { writeSessionStart } from '../session.js';
 import {
   buildChildEnv,
   buildFakeTmuxScript,
+  buildListedPaneFakeTmuxScript,
 } from '../../test-support/shared-harness.js';
 
 async function appendLine(path: string, line: object): Promise<void> {
@@ -74,7 +75,7 @@ function buildFakeTmux(
   options: Parameters<typeof buildFakeTmuxScript>[1] = {},
 ): string {
   const probePath = dirname(tmuxLogPath);
-  return buildFakeTmuxScript(tmuxLogPath, {
+  return buildListedPaneFakeTmuxScript(tmuxLogPath, ['%42 1'], {
     defaultProbe: {
       paneInMode: '0',
       paneId: '%42',
@@ -84,7 +85,6 @@ function buildFakeTmux(
       sessionName: 'session-test',
     },
     ...options,
-    listPaneLines: options.listPaneLines ?? ['%42 1'],
     sessionPaneLines: ['%42\tcodex\tcodex --model gpt-5'],
     allPaneLines: [`%42\t${probePath}\tcodex\tcodex --model gpt-5`],
   });

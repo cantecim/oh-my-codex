@@ -1,4 +1,5 @@
-import { appendDebugJsonl, isTestDebugEnabled, writeDebugJson, writeDebugFixtureManifest } from '../debug/test-debug.js';
+import { resolve } from 'node:path';
+import { appendDebugJsonl, isTestDebugEnabled, resolveDebugTestId, writeDebugJson, writeDebugFixtureManifest } from '../debug/test-debug.js';
 
 const ENV_TRACE_KEYS = [
   'PATH',
@@ -46,45 +47,87 @@ export function diffTrackedEnv(
   return diff;
 }
 
-export async function recordTempDirFixtureCreated(dir: string, prefix: string): Promise<Record<string, string> | null> {
-  if (!isTestDebugEnabled()) return null;
-  const envBefore = collectTrackedEnv();
+export function isFixtureDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTestDebugEnabled(env);
+}
+
+export function buildFixtureDebugChildEnv(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  if (!isFixtureDebugEnabled(env)) return {};
+  const debugEnv: Record<string, string> = {
+    OMX_TEST_DEBUG: '1',
+  };
+  const explicitTestId = typeof env.OMX_TEST_DEBUG_TEST_ID === 'string' ? env.OMX_TEST_DEBUG_TEST_ID.trim() : '';
+  debugEnv.OMX_TEST_DEBUG_TEST_ID = explicitTestId || resolveDebugTestId(cwd, env);
+  if (typeof env.OMX_TEST_ARTIFACTS_DIR === 'string' && env.OMX_TEST_ARTIFACTS_DIR.trim() !== '') {
+    debugEnv.OMX_TEST_ARTIFACTS_DIR = env.OMX_TEST_ARTIFACTS_DIR;
+  }
+  return debugEnv;
+}
+
+export async function writeFixtureArtifactManifest(
+  cwd: string,
+  manifest: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  return await writeDebugJson(cwd, 'test-manifest.json', {
+    cwd: resolve(cwd),
+    ...manifest,
+  }, env);
+}
+
+export async function recordTempDirFixtureCreated(
+  dir: string,
+  prefix: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Record<string, string> | null> {
+  if (!isFixtureDebugEnabled(env)) return null;
+  const envBefore = collectTrackedEnv(env);
   await writeDebugFixtureManifest(dir, {
     type: 'temp_dir_fixture',
     prefix,
-  });
-  await writeDebugJson(dir, 'env-before.json', envBefore);
+  }, env);
+  await writeDebugJson(dir, 'env-before.json', envBefore, env);
   await appendDebugJsonl(dir, 'lifecycle.jsonl', {
     type: 'temp_dir_created',
     prefix,
     cwd: dir,
-  });
+  }, env);
   return envBefore;
 }
 
-export async function recordTempDirFixtureFinished(dir: string): Promise<void> {
-  if (!isTestDebugEnabled()) return;
-  const envAfter = collectTrackedEnv();
-  const restoredEnv = collectTrackedEnv();
+export async function recordTempDirFixtureFinished(
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  if (!isFixtureDebugEnabled(env)) return;
+  const envAfter = collectTrackedEnv(env);
+  const restoredEnv = collectTrackedEnv(env);
   const envDiff = diffTrackedEnv(envAfter, restoredEnv);
-  await writeDebugJson(dir, 'env-after.json', restoredEnv);
-  await writeDebugJson(dir, 'env-diff.json', envDiff);
+  await writeDebugJson(dir, 'env-after.json', restoredEnv, env);
+  await writeDebugJson(dir, 'env-diff.json', envDiff, env);
   await appendDebugJsonl(dir, 'lifecycle.jsonl', {
     type: 'temp_dir_cleanup_skipped_debug',
     cwd: dir,
-  });
+  }, env);
   await appendDebugJsonl(dir, 'lifecycle.jsonl', {
     type: 'temp_dir_preserved',
     cwd: dir,
     artifact_dir: null,
-  });
+  }, env);
 }
 
-export async function recordEnvMutation(cwd: string, beforeSnapshot: Record<string, string> | null): Promise<void> {
-  if (!beforeSnapshot || !isTestDebugEnabled()) return;
-  const afterSnapshot = collectTrackedEnv();
+export async function recordEnvMutation(
+  cwd: string,
+  beforeSnapshot: Record<string, string> | null,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  if (!beforeSnapshot || !isFixtureDebugEnabled(env)) return;
+  const afterSnapshot = collectTrackedEnv(env);
   const diff = diffTrackedEnv(beforeSnapshot, afterSnapshot);
-  await writeDebugJson(cwd, 'env-before.json', beforeSnapshot).catch(() => {});
-  await writeDebugJson(cwd, 'env-after.json', afterSnapshot).catch(() => {});
-  await writeDebugJson(cwd, 'env-diff.json', diff).catch(() => {});
+  await writeDebugJson(cwd, 'env-before.json', beforeSnapshot, env).catch(() => {});
+  await writeDebugJson(cwd, 'env-after.json', afterSnapshot, env).catch(() => {});
+  await writeDebugJson(cwd, 'env-diff.json', diff, env).catch(() => {});
 }

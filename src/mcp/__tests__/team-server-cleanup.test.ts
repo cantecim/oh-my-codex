@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, mkdir, chmod, readFile } from "fs/promises";
 import { join } from "path";
-import { tmpdir, homedir } from "os";
+import { tmpdir } from "os";
 import {
   initTeamState,
   readTeamConfig,
@@ -10,23 +10,22 @@ import {
 } from "../../team/state.js";
 import { buildIsolatedEnv, withEnv, withTempHome } from "../../test-support/shared-harness.js";
 
-function getOmxJobsDir(): string {
-  return join(homedir(), ".omx", "team-jobs");
+function getOmxJobsDir(homeDir: string): string {
+  return join(homeDir, ".omx", "team-jobs");
 }
 
 async function writeJobFiles(
+  jobsDir: string,
   jobId: string,
   job: Record<string, unknown>,
   panes: { paneIds: string[]; leaderPaneId: string },
 ): Promise<void> {
-  const jobsDir = getOmxJobsDir();
   await mkdir(jobsDir, { recursive: true });
   await writeFile(join(jobsDir, `${jobId}.json`), JSON.stringify(job));
   await writeFile(join(jobsDir, `${jobId}-panes.json`), JSON.stringify(panes));
 }
 
-async function cleanupJobFiles(jobId: string): Promise<void> {
-  const jobsDir = getOmxJobsDir();
+async function cleanupJobFiles(jobsDir: string, jobId: string): Promise<void> {
   await rm(join(jobsDir, `${jobId}.json`), { force: true });
   await rm(join(jobsDir, `${jobId}-panes.json`), { force: true });
 }
@@ -38,9 +37,14 @@ async function loadTeamServer() {
   );
 }
 
-async function withSyntheticHome<T>(run: () => Promise<T>): Promise<T> {
+async function withSyntheticHome<T>(run: (ctx: { homeDir: string; jobsDir: string }) => Promise<T>): Promise<T> {
   return withTempHome("omx-team-home-", async (tempHome) => {
-    return await withEnv({ HOME: tempHome }, run);
+    return await withEnv({ HOME: tempHome }, async () => {
+      return await run({
+        homeDir: tempHome,
+        jobsDir: getOmxJobsDir(tempHome),
+      });
+    });
   });
 }
 
@@ -51,7 +55,7 @@ function prefixedPath(dir: string): string {
 
 describe("team-server cleanup hardening", () => {
   it("intersects live-session candidates with team config + panes file identities before kill", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const cwd = await mkdtemp(join(tmpdir(), "omx-team-cleanup-identity-"));
       const fakeBinDir = await mkdtemp(join(tmpdir(), "omx-team-cleanup-bin-"));
       const tmuxLogPath = join(fakeBinDir, "tmux.log");
@@ -85,6 +89,7 @@ exit 0
           await saveTeamConfig(config, cwd);
 
           await writeJobFiles(
+            jobsDir,
             jobId,
             {
               status: "running",
@@ -122,7 +127,7 @@ exit 0
           assert.doesNotMatch(tmuxLog, /kill-pane -t %999/);
         });
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
         await rm(cwd, { recursive: true, force: true });
         await rm(fakeBinDir, { recursive: true, force: true });
       }
@@ -130,7 +135,7 @@ exit 0
   });
 
   it("does not broad-sweep session panes during cleanup target selection", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const cwd = await mkdtemp(join(tmpdir(), "omx-team-cleanup-sweep-"));
       const fakeBinDir = await mkdtemp(
         join(tmpdir(), "omx-team-cleanup-sweep-bin-"),
@@ -163,6 +168,7 @@ exit 0
           await saveTeamConfig(config, cwd);
 
           await writeJobFiles(
+            jobsDir,
             jobId,
             {
               status: "running",
@@ -190,7 +196,7 @@ exit 0
           assert.doesNotMatch(tmuxLog, /kill-pane -t %1000/);
         });
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
         await rm(cwd, { recursive: true, force: true });
         await rm(fakeBinDir, { recursive: true, force: true });
       }
@@ -198,7 +204,7 @@ exit 0
   });
 
   it("returns unchanged legacy content[0].text plus additive structured JSON in content[1].text", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const cwd = await mkdtemp(join(tmpdir(), "omx-team-cleanup-legacy-"));
       const fakeBinDir = await mkdtemp(
         join(tmpdir(), "omx-team-cleanup-legacy-bin-"),
@@ -211,6 +217,7 @@ exit 0
         await chmod(tmuxStubPath, 0o755);
         await withEnv({ PATH: prefixedPath(fakeBinDir) }, async () => {
           await writeJobFiles(
+            jobsDir,
             jobId,
             {
               status: "running",
@@ -247,7 +254,7 @@ exit 0
           assert.equal(summary.grace_ms, 10);
         });
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
         await rm(cwd, { recursive: true, force: true });
         await rm(fakeBinDir, { recursive: true, force: true });
       }
@@ -255,9 +262,8 @@ exit 0
   });
 
   it("returns deterministic noop summary when no killable panes remain", async () => {
-    await withSyntheticHome(async () => {
+    await withSyntheticHome(async ({ jobsDir }) => {
       const jobId = `omx-${Date.now().toString(36)}`;
-      const jobsDir = getOmxJobsDir();
       try {
         await mkdir(jobsDir, { recursive: true });
         await writeFile(
@@ -300,7 +306,7 @@ exit 0
           failed: 0,
         });
       } finally {
-        await cleanupJobFiles(jobId);
+        await cleanupJobFiles(jobsDir, jobId);
       }
     });
   });

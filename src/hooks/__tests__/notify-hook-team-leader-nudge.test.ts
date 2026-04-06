@@ -20,6 +20,7 @@ import {
 import {
   buildChildEnv,
   buildFakeTmuxScript,
+  buildListedPaneFakeTmuxScript,
   readJson,
   withTempDir,
   writeJson,
@@ -34,29 +35,13 @@ const withTempWorkingDir = (
   run: (cwd: string) => Promise<void>,
 ): Promise<void> => withTempDir("omx-notify-team-nudge-", run);
 
-function buildFakeTmux(tmuxLogPath: string): string {
-  return buildFakeTmuxScript(tmuxLogPath, {
-    listPaneLines: ["%1 12345", "%2 12346"],
-  });
-}
-
 type FakeTmuxOptions = Parameters<typeof buildFakeTmuxScript>[1];
 
 function buildTeamLeaderTmux(
   tmuxLogPath: string,
   options: FakeTmuxOptions = {},
 ): string {
-  return buildFakeTmuxScript(tmuxLogPath, {
-    ...options,
-    listPaneLines: options.listPaneLines ?? ["%1 12345", "%2 12346"],
-  });
-}
-
-function buildFakeTmuxWithListPanes(
-  tmuxLogPath: string,
-  listPaneLines: string[],
-): string {
-  return buildTeamLeaderTmux(tmuxLogPath, { listPaneLines });
+  return buildListedPaneFakeTmuxScript(tmuxLogPath, ["%1 12345", "%2 12346"], options);
 }
 
 function runNotifyHook(
@@ -160,7 +145,7 @@ describe("notify-hook leader-side authority handoff", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -186,7 +171,7 @@ describe("notify-hook leader-side authority handoff", () => {
       const tmuxLogPath = join(cwd, "tmux.log");
       await mkdir(join(cwd, ".omx", "logs"), { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       await initTeamState("handoff-dispatch", "task", "executor", 1, cwd);
@@ -262,7 +247,7 @@ describe("notify-hook leader-side authority handoff", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -330,7 +315,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -392,7 +377,7 @@ describe("notify-hook team leader nudge", () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -496,7 +481,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -575,7 +560,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -642,7 +627,7 @@ describe("notify-hook team leader nudge", () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -745,7 +730,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -821,7 +806,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%98 12349"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%98 12349"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -890,7 +875,7 @@ describe("notify-hook team leader nudge", () => {
         });
       }
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -950,7 +935,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1022,7 +1007,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1126,7 +1111,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1207,7 +1192,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const first = runNotifyHook(cwd, fakeBinDir, {
@@ -1430,7 +1415,7 @@ describe("notify-hook team leader nudge", () => {
         updated_at: "2026-03-09T19:20:19.088Z",
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1503,7 +1488,7 @@ describe("notify-hook team leader nudge", () => {
         });
       }
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1581,7 +1566,7 @@ describe("notify-hook team leader nudge", () => {
         });
       }
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1636,7 +1621,7 @@ describe("notify-hook team leader nudge", () => {
 
       // No mailbox messages — but worker panes alive should trigger nudge
       await writeFile(tmuxLogPath, "");
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -1783,7 +1768,7 @@ describe("notify-hook team leader nudge", () => {
       await writeFile(tmuxLogPath, "");
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -1922,7 +1907,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -2045,7 +2030,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -2174,7 +2159,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -2299,7 +2284,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%10 12345", "%11 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%10 12345", "%11 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -2380,7 +2365,7 @@ describe("notify-hook team leader nudge", () => {
 
       await writeFile(
         fakeTmuxPath,
-        buildFakeTmuxWithListPanes(tmuxLogPath, ["%92 12345", "%93 12346"]),
+        buildTeamLeaderTmux(tmuxLogPath, { listPaneLines: ["%92 12345", "%93 12346"] }),
       );
       await chmod(fakeTmuxPath, 0o755);
 
@@ -2429,7 +2414,7 @@ describe("notify-hook team leader nudge", () => {
         turn_count: 2,
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir, {
@@ -2494,7 +2479,7 @@ describe("notify-hook team leader nudge", () => {
         },
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const blocked = runNotifyHook(cwd, fakeBinDir, {
@@ -2581,7 +2566,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -2653,7 +2638,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -2745,7 +2730,7 @@ describe("notify-hook team leader nudge", () => {
         });
       }
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const first = runNotifyHook(cwd, fakeBinDir, {
@@ -2790,7 +2775,7 @@ describe("notify-hook team leader nudge", () => {
       await mkdir(fakeBinDir, { recursive: true });
 
       // No team-state.json — no active team
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);
@@ -2858,7 +2843,7 @@ describe("notify-hook team leader nudge", () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildTeamLeaderTmux(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir);

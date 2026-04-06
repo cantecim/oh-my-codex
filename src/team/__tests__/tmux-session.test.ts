@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { withEnv } from '../../test-support/shared-harness.js';
+import { buildIsolatedEnv, withEnv } from '../../test-support/shared-harness.js';
 import {
   buildClientAttachedReconcileHookName,
   assertTeamWorkerCliBinaryAvailable,
@@ -130,7 +130,8 @@ async function withMockTmuxFixture<T>(
   try {
     await writeFile(tmuxStubPath, tmuxScript(logPath));
     await chmod(tmuxStubPath, 0o755);
-    return await withEnv({ PATH: `${fakeBinDir}:${process.env.PATH ?? ''}` }, async () => run({ logPath }));
+    const hostPath = buildIsolatedEnv().PATH ?? '';
+    return await withEnv({ PATH: hostPath ? `${fakeBinDir}:${hostPath}` : fakeBinDir }, async () => run({ logPath }));
   } finally {
     await rm(fakeBinDir, { recursive: true, force: true });
   }

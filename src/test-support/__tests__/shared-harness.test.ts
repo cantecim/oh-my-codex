@@ -7,6 +7,8 @@ import {
   buildChildEnv,
   buildDebugChildEnv,
   buildFakeTmuxScript,
+  buildListedPaneFakeTmuxScript,
+  buildSinglePaneFakeTmuxScript,
   buildIsolatedEnv,
 } from '../shared-harness.js';
 
@@ -98,5 +100,21 @@ describe('shared harness isolation contract', () => {
     assert.match(script, /OMX_TEST_CAPTURE_SEQUENCE_FILE/);
     assert.match(script, /OMX_TEST_CAPTURE_COUNTER_FILE/);
     assert.doesNotMatch(script, /OMX_RUNTIME_BINARY/);
+  });
+
+  it('supports explicit fake tmux capture failure without ambient env mutation', () => {
+    const script = buildFakeTmuxScript('/tmp/tmux.log', { failCapture: true });
+    assert.match(script, /capture failed/);
+  });
+
+  it('provides a canonical single-pane fake tmux helper', () => {
+    const script = buildSinglePaneFakeTmuxScript('/tmp/tmux.log');
+    assert.match(script, /%1 12345/);
+  });
+
+  it('provides a canonical listed-pane fake tmux helper', () => {
+    const script = buildListedPaneFakeTmuxScript('/tmp/tmux.log', ['%1 12345', '%2 12346']);
+    assert.match(script, /%1 12345/);
+    assert.match(script, /%2 12346/);
   });
 });

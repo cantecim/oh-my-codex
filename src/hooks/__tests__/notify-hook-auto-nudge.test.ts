@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { buildTmuxSessionName } from '../../cli/index.js';
 import {
   buildChildEnv,
-  buildFakeTmuxScript,
+  buildListedPaneFakeTmuxScript,
   withTempDir,
   writeJson,
 } from '../../test-support/shared-harness.js';
@@ -64,9 +64,9 @@ function escapeRegex(value: string): string {
 function buildFakeTmux(
   tmuxLogPath: string,
   paneInMode: '0' | '1' = '0',
-  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+  options: Parameters<typeof buildListedPaneFakeTmuxScript>[2] = {},
 ): string {
-  return buildFakeTmuxScript(tmuxLogPath, {
+  return buildListedPaneFakeTmuxScript(tmuxLogPath, ['%1 12345'], {
     defaultProbe: {
       paneInMode,
       sessionName: 'devsess',

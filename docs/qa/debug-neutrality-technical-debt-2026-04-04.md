@@ -1,5 +1,11 @@
 # Debug Neutrality Technical Debt
 
+Superseded:
+
+- This document is now a historical recovery/debt note.
+- The active source of truth is [debug-trace-boundary-separation-master-plan-2026-04-06.md](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/docs/qa/debug-trace-boundary-separation-master-plan-2026-04-06.md).
+- Read this document for historical context only, not for current planning authority.
+
 Date: 2026-04-04
 
 ## Summary

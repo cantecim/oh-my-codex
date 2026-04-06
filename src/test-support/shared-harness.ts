@@ -1,8 +1,15 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { collectTrackedEnv, recordEnvMutation, recordTempDirFixtureCreated, recordTempDirFixtureFinished } from './fixture-debug.js';
-import { appendDebugJsonl, isTestDebugEnabled, resolveDebugTestId, writeDebugJson } from '../debug/test-debug.js';
+import { dirname, join } from 'node:path';
+import {
+  buildFixtureDebugChildEnv,
+  collectTrackedEnv,
+  isFixtureDebugEnabled,
+  recordEnvMutation,
+  recordTempDirFixtureCreated,
+  recordTempDirFixtureFinished,
+  writeFixtureArtifactManifest,
+} from './fixture-debug.js';
 
 // Intentional test-only whitelist. These are the only OMX_TEST_* keys that
 // auto-forward through the isolation contract.
@@ -42,7 +49,7 @@ export async function withTempDir<T>(
   run: (dir: string) => Promise<T> | T,
 ): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
-  const debugEnabled = isTestDebugEnabled();
+  const debugEnabled = isFixtureDebugEnabled();
   await recordTempDirFixtureCreated(dir, prefix);
   try {
     return await run(dir);
@@ -50,15 +57,7 @@ export async function withTempDir<T>(
     if (debugEnabled) {
       await recordTempDirFixtureFinished(dir);
     } else {
-      await appendDebugJsonl(dir, 'lifecycle.jsonl', {
-        type: 'temp_dir_cleanup_started',
-        cwd: resolve(dir),
-      }).catch(() => {});
       await rm(dir, { recursive: true, force: true });
-      await appendDebugJsonl(dir, 'lifecycle.jsonl', {
-        type: 'temp_dir_cleanup_finished',
-        cwd: resolve(dir),
-      }).catch(() => {});
     }
   }
 }
@@ -79,26 +78,14 @@ export async function writeTestArtifactManifest(
   cwd: string,
   manifest: Record<string, unknown>,
 ): Promise<string | null> {
-  return await writeDebugJson(cwd, 'test-manifest.json', {
-    cwd: resolve(cwd),
-    ...manifest,
-  });
+  return await writeFixtureArtifactManifest(cwd, manifest);
 }
 
 export function buildDebugChildEnv(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  if (!isTestDebugEnabled(env)) return {};
-  const debugEnv: Record<string, string> = {
-    OMX_TEST_DEBUG: '1',
-  };
-  const explicitTestId = typeof env.OMX_TEST_DEBUG_TEST_ID === 'string' ? env.OMX_TEST_DEBUG_TEST_ID.trim() : '';
-  debugEnv.OMX_TEST_DEBUG_TEST_ID = explicitTestId || resolveDebugTestId(cwd, env);
-  if (typeof env.OMX_TEST_ARTIFACTS_DIR === 'string' && env.OMX_TEST_ARTIFACTS_DIR.trim() !== '') {
-    debugEnv.OMX_TEST_ARTIFACTS_DIR = env.OMX_TEST_ARTIFACTS_DIR;
-  }
-  return debugEnv;
+  return buildFixtureDebugChildEnv(cwd, env);
 }
 
 export function buildChildEnv(
@@ -120,7 +107,7 @@ export async function withEnv<T>(
   overrides: Record<string, string | undefined>,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  const debugEnabled = isTestDebugEnabled();
+  const debugEnabled = isFixtureDebugEnabled();
   const cwd = process.cwd();
   const beforeSnapshot = debugEnabled ? collectTrackedEnv() : null;
   const previous = new Map<string, string | undefined>();
@@ -202,6 +189,7 @@ export interface FakeTmuxScriptOptions {
   listPaneTargets?: Record<string, string[]>;
   captureOutput?: string;
   captureSequence?: string[];
+  failCapture?: boolean;
   failSendKeys?: boolean;
   failSendKeysMatch?: string;
   unsupportedExitCode?: 0 | 1;
@@ -273,6 +261,7 @@ export function buildFakeTmuxScript(
   tmuxLogPath: string,
   options: FakeTmuxScriptOptions = {},
 ): string {
+  const failCapture = options.failCapture === true ? '1' : '0';
   const failSendKeys = options.failSendKeys === true ? '1' : '0';
   const failSendKeysMatch = options.failSendKeysMatch ? quoteBash(options.failSendKeysMatch) : '""';
   const unsupportedExitCode = options.unsupportedExitCode ?? 0;
@@ -318,6 +307,10 @@ __tmux_cmd="$cmd"
 shift || true
 if [[ "$cmd" == "capture-pane" ]]; then
   __tmux_branch="capture-pane"
+  if [[ "${failCapture}" == "1" ]]; then
+    echo "capture failed" >&2
+    exit 1
+  fi
   # OMX_TEST_CAPTURE_* is an intentional test contract. These are not runtime
   # selectors and are the only ambient env inputs this helper is allowed to
   # read without per-call options.
@@ -407,6 +400,24 @@ fi
 __tmux_branch="fallback"
 exit ${unsupportedExitCode}
 `;
+}
+
+export function buildSinglePaneFakeTmuxScript(
+  tmuxLogPath: string,
+  options: FakeTmuxScriptOptions = {},
+): string {
+  return buildListedPaneFakeTmuxScript(tmuxLogPath, ['%1 12345'], options);
+}
+
+export function buildListedPaneFakeTmuxScript(
+  tmuxLogPath: string,
+  listPaneLines: string[],
+  options: FakeTmuxScriptOptions = {},
+): string {
+  return buildFakeTmuxScript(tmuxLogPath, {
+    ...options,
+    listPaneLines: options.listPaneLines ?? listPaneLines,
+  });
 }
 
 function currentHomeDir(): string {

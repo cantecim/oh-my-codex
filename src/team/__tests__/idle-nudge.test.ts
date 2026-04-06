@@ -4,68 +4,21 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildIsolatedEnv, withEnv } from '../../test-support/shared-harness.js';
+import { buildFakeTmuxScript, buildIsolatedEnv, withEnv } from '../../test-support/shared-harness.js';
 import { DEFAULT_NUDGE_CONFIG, NudgeTracker, capturePane, isPaneIdle } from '../idle-nudge.js';
 
-function buildFakeTmux(tmuxLogPath: string): string {
-  return `#!/usr/bin/env bash
-set -eu
-printf '%s\\n' "$*" >> "${tmuxLogPath}"
-cmd="\${1:-}"
-if [[ $# -gt 0 ]]; then
-  shift
-fi
-
-if [[ "\$cmd" == "capture-pane" ]]; then
-  if [[ "\${OMX_FAIL_CAPTURE:-0}" == "1" ]]; then
-    exit 1
-  fi
-
-  token=""
-  if [[ -n "\${OMX_CAPTURE_SEQ_FILE:-}" && -f "\${OMX_CAPTURE_SEQ_FILE}" ]]; then
-    token="\$(head -n 1 "\${OMX_CAPTURE_SEQ_FILE}" || true)"
-    if [[ -n "\$token" ]]; then
-      tail -n +2 "\${OMX_CAPTURE_SEQ_FILE}" > "\${OMX_CAPTURE_SEQ_FILE}.tmp" || true
-      mv "\${OMX_CAPTURE_SEQ_FILE}.tmp" "\${OMX_CAPTURE_SEQ_FILE}"
-    fi
-  fi
-  if [[ -z "\$token" ]]; then
-    token="\${OMX_CAPTURE_TOKEN:-IDLE}"
-  fi
-
-  case "\$token" in
-    IDLE)
-      printf '› \\n'
-      ;;
-    ACTIVE)
-      printf '› \\n• Doing work (3s • esc to interrupt)\\n'
-      ;;
-    EMPTY)
-      ;;
-    RAW:*)
-      printf '%s\\n' "\${token#RAW:}"
-      ;;
-    *)
-      printf '%s\\n' "\$token"
-      ;;
-  esac
-  exit 0
-fi
-
-if [[ "\$cmd" == "send-keys" ]]; then
-  if [[ "\${OMX_FAIL_SEND_KEYS:-0}" == "1" ]]; then
-    exit 1
-  fi
-  exit 0
-fi
-
-if [[ "\$cmd" == "list-panes" ]]; then
-  printf '0 12345\\n'
-  exit 0
-fi
-
-exit 0
-`;
+function renderCaptureToken(token: string): string {
+  switch (token) {
+    case 'IDLE':
+      return '› ';
+    case 'ACTIVE':
+      return '› • Doing work (3s • esc to interrupt)';
+    case 'EMPTY':
+      return '';
+    default:
+      if (token.startsWith('RAW:')) return token.slice(4);
+      return token;
+  }
 }
 
 async function withFakeTmux(run: (ctx: {
@@ -77,25 +30,31 @@ async function withFakeTmux(run: (ctx: {
   const tmuxPath = join(binDir, 'tmux');
   const tmuxLogPath = join(root, 'tmux.log');
   const captureSeqPath = join(root, 'capture-seq.txt');
+  const captureFilePath = join(root, 'capture.txt');
 
   const hostPath = buildIsolatedEnv().PATH ?? '';
 
   try {
     await mkdir(binDir, { recursive: true });
-    await writeFile(tmuxPath, buildFakeTmux(tmuxLogPath));
+    await writeFile(
+      tmuxPath,
+      buildFakeTmuxScript(tmuxLogPath, {
+        listPaneLines: ['0 12345'],
+      }),
+    );
     await chmod(tmuxPath, 0o755);
+    await writeFile(captureFilePath, renderCaptureToken('IDLE'));
 
     await withEnv({
       PATH: hostPath ? `${binDir}:${hostPath}` : binDir,
-      OMX_CAPTURE_SEQ_FILE: captureSeqPath,
-      OMX_CAPTURE_TOKEN: 'IDLE',
-      OMX_FAIL_SEND_KEYS: undefined,
-      OMX_FAIL_CAPTURE: undefined,
+      OMX_TEST_CAPTURE_SEQUENCE_FILE: captureSeqPath,
+      OMX_TEST_CAPTURE_COUNTER_FILE: undefined,
+      OMX_TEST_CAPTURE_FILE: captureFilePath,
     }, async () => {
       await run({
         tmuxLogPath,
         setCaptureSequence: async (tokens: string[]) => {
-          await writeFile(captureSeqPath, tokens.join('\n'));
+          await writeFile(captureSeqPath, tokens.map(renderCaptureToken).join('\n'));
         },
       });
     });
@@ -219,26 +178,67 @@ describe('idle-nudge', () => {
 
   it('does not count nudges when sendToWorker fails', async () => {
     await withFakeTmux(async () => {
-      process.env.OMX_FAIL_SEND_KEYS = '1';
+      const root = await mkdtemp(join(tmpdir(), 'omx-idle-nudge-fail-send-'));
+      const binDir = join(root, 'bin');
+      const tmuxPath = join(binDir, 'tmux');
+      const hostPath = buildIsolatedEnv().PATH ?? '';
+      try {
+        await mkdir(binDir, { recursive: true });
+        await writeFile(
+          tmuxPath,
+          buildFakeTmuxScript(join(root, 'tmux.log'), {
+            listPaneLines: ['0 12345'],
+            failSendKeys: true,
+          }),
+        );
+        await chmod(tmuxPath, 0o755);
 
-      await withMockedNow(10_000, async () => {
-        const tracker = new NudgeTracker({ delayMs: 0, maxCount: 3, message: 'nudge' });
-        const nudged = await tracker.checkAndNudge(['%2'], undefined, 'omx-team-a');
-        assert.deepEqual(nudged, []);
-        assert.equal(tracker.totalNudges, 0);
-        assert.deepEqual(tracker.getSummary(), {});
-      });
+        await withEnv({
+          PATH: hostPath ? `${binDir}:${hostPath}` : binDir,
+        }, async () => {
+          await withMockedNow(10_000, async () => {
+            const tracker = new NudgeTracker({ delayMs: 0, maxCount: 3, message: 'nudge' });
+            const nudged = await tracker.checkAndNudge(['%2'], undefined, 'omx-team-a');
+            assert.deepEqual(nudged, []);
+            assert.equal(tracker.totalNudges, 0);
+            assert.deepEqual(tracker.getSummary(), {});
+          });
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 
   it('returns empty capture and non-idle when capture-pane command fails', async () => {
     await withFakeTmux(async () => {
-      process.env.OMX_FAIL_CAPTURE = '1';
-      const captured = await capturePane('%2');
-      assert.equal(captured, '');
+      const root = await mkdtemp(join(tmpdir(), 'omx-idle-nudge-fail-capture-'));
+      const binDir = join(root, 'bin');
+      const tmuxPath = join(binDir, 'tmux');
+      const hostPath = buildIsolatedEnv().PATH ?? '';
+      try {
+        await mkdir(binDir, { recursive: true });
+        await writeFile(
+          tmuxPath,
+          buildFakeTmuxScript(join(root, 'tmux.log'), {
+            listPaneLines: ['0 12345'],
+            failCapture: true,
+          }),
+        );
+        await chmod(tmuxPath, 0o755);
 
-      const idle = await isPaneIdle('%2');
-      assert.equal(idle, false);
+        await withEnv({
+          PATH: hostPath ? `${binDir}:${hostPath}` : binDir,
+        }, async () => {
+          const captured = await capturePane('%2');
+          assert.equal(captured, '');
+
+          const idle = await isPaneIdle('%2');
+          assert.equal(idle, false);
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -19,7 +19,7 @@ import { writeSessionStart } from '../session.js';
 import { tmpdir } from 'node:os';
 import {
   buildChildEnv,
-  buildFakeTmuxScript,
+  buildSinglePaneFakeTmuxScript,
   withEnv,
 } from '../../test-support/shared-harness.js';
 
@@ -46,9 +46,9 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 
 function buildFakeTmux(
   tmuxLogPath: string,
-  options: Parameters<typeof buildFakeTmuxScript>[1] = {},
+  options: Parameters<typeof buildSinglePaneFakeTmuxScript>[1] = {},
 ): string {
-  return buildFakeTmuxScript(tmuxLogPath, {
+  return buildSinglePaneFakeTmuxScript(tmuxLogPath, {
     ...options,
     paneProbes: {
       '%99': {
@@ -62,7 +62,6 @@ function buildFakeTmux(
       sessionName: 'devsess',
       ...(options.defaultProbe ?? {}),
     },
-    listPaneLines: options.listPaneLines ?? ['%1 12345'],
   });
 }
 

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildChildEnv,
-  buildFakeTmuxScript,
+  buildSinglePaneFakeTmuxScript,
 } from '../../test-support/shared-harness.js';
 
 const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', import.meta.url);
@@ -24,15 +24,6 @@ async function withTempWorkingDir(run: (cwd: string) => Promise<void>): Promise<
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(join(path, '..'), { recursive: true });
   await writeFile(path, JSON.stringify(value, null, 2));
-}
-
-type FakeTmuxOptions = Parameters<typeof buildFakeTmuxScript>[1];
-
-function buildFakeTmux(tmuxLogPath: string, options: FakeTmuxOptions = {}): string {
-  return buildFakeTmuxScript(tmuxLogPath, {
-    ...options,
-    listPaneLines: options.listPaneLines ?? ['%1 12345'],
-  });
 }
 
 function runNotifyHookAsWorker(
@@ -107,7 +98,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -183,7 +174,7 @@ describe('notify-hook all-workers-idle notification', () => {
         });
       }
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const first = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`, { OMX_TEAM_ALL_IDLE_COOLDOWN_MS: '600000' });
@@ -234,7 +225,7 @@ describe('notify-hook all-workers-idle notification', () => {
         });
       }
 
-      const fakeTmux = buildFakeTmux(tmuxLogPath, {
+      const fakeTmux = buildSinglePaneFakeTmuxScript(tmuxLogPath, {
         paneProbes: {
           '%181': {
             currentCommand: 'zsh',
@@ -302,7 +293,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -351,7 +342,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -414,7 +405,7 @@ describe('notify-hook all-workers-idle notification', () => {
         alive: true,
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -458,7 +449,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -508,7 +499,7 @@ describe('notify-hook all-workers-idle notification', () => {
         worker_count: 1,
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       // Use a long cooldown (10 minutes) so the 100ms-old entry blocks the notification
@@ -563,7 +554,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -613,7 +604,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       // Run as LEADER (no OMX_TEAM_WORKER env var)
@@ -678,7 +669,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
@@ -738,7 +729,7 @@ describe('notify-hook all-workers-idle notification', () => {
         updated_at: new Date().toISOString(),
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildSinglePaneFakeTmuxScript(tmuxLogPath));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);

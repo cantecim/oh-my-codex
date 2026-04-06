@@ -29,14 +29,12 @@ function scrubTmuxEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   };
 }
 
-function runTmux(
+function runTmuxCommand(
   args: string[],
-  options: { ignoreTmuxEnv?: boolean; env?: NodeJS.ProcessEnv; serverName?: string } = {},
+  env: NodeJS.ProcessEnv = process.env,
+  serverName?: string,
 ): string {
-  const env = options.env
-    ? (options.ignoreTmuxEnv ? scrubTmuxEnv(options.env) : options.env)
-    : (options.ignoreTmuxEnv ? scrubTmuxEnv(process.env) : process.env);
-  const argv = options.serverName ? ['-L', options.serverName, ...args] : args;
+  const argv = serverName ? ['-L', serverName, ...args] : args;
   const result = spawnSync('tmux', argv, {
     encoding: 'utf-8',
     env,
@@ -51,9 +49,30 @@ function runTmux(
   return (result.stdout || '').trim();
 }
 
+export function runAmbientTmux(args: string[], env: NodeJS.ProcessEnv = process.env): string {
+  return runTmuxCommand(args, scrubTmuxEnv(env));
+}
+
+function runFixtureServerTmux(
+  args: string[],
+  serverName?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return runTmuxCommand(args, scrubTmuxEnv(env), serverName);
+}
+
 export function isRealTmuxAvailable(): boolean {
   try {
-    runTmux(['-V'], { ignoreTmuxEnv: true });
+    runAmbientTmux(['-V']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function ambientTmuxSessionExists(sessionName: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  try {
+    runAmbientTmux(['has-session', '-t', sessionName], env);
     return true;
   } catch {
     return false;
@@ -62,10 +81,7 @@ export function isRealTmuxAvailable(): boolean {
 
 export function tmuxSessionExists(sessionName: string, serverName?: string): boolean {
   try {
-    runTmux(['has-session', '-t', sessionName], {
-      ignoreTmuxEnv: true,
-      serverName,
-    });
+    runFixtureServerTmux(['has-session', '-t', sessionName], serverName);
     return true;
   } catch {
     return false;
@@ -94,9 +110,8 @@ export async function withTempTmuxSession<T>(
   const sessionName = uniqueTmuxIdentifier('omx-test');
   const serverName = options.useAmbientServer ? '' : uniqueTmuxIdentifier('omx-fixture');
   const serverKind: TempTmuxSessionFixture['serverKind'] = options.useAmbientServer ? 'ambient' : 'synthetic';
-  const tmuxOptions = { ignoreTmuxEnv: true, serverName: serverName || undefined } as const;
 
-  const created = runTmux([
+  const created = runFixtureServerTmux([
     'new-session',
     '-d',
     '-P',
@@ -107,21 +122,24 @@ export async function withTempTmuxSession<T>(
     '-c',
     fixtureCwd,
     'sleep 300',
-  ], tmuxOptions);
+  ], serverName || undefined);
   const [windowTarget = '', leaderPaneId = ''] = created.split(/\s+/, 2);
   if (windowTarget === '' || leaderPaneId === '') {
     try {
       if (serverKind === 'synthetic') {
-        runTmux(['kill-server'], tmuxOptions);
+        runFixtureServerTmux(['kill-server'], serverName || undefined);
       } else {
-        runTmux(['kill-session', '-t', sessionName], tmuxOptions);
+        runFixtureServerTmux(['kill-session', '-t', sessionName], serverName || undefined);
       }
     } catch {}
     await rm(fixtureCwd, { recursive: true, force: true });
     throw new Error(`failed to create temporary tmux fixture: ${created}`);
   }
 
-  const socketPath = runTmux(['display-message', '-p', '-t', leaderPaneId, '#{socket_path}'], tmuxOptions);
+  const socketPath = runFixtureServerTmux(
+    ['display-message', '-p', '-t', leaderPaneId, '#{socket_path}'],
+    serverName || undefined,
+  );
   const fixtureEnv = {
     TMUX: `${socketPath},${process.pid},0`,
     TMUX_PANE: leaderPaneId,
@@ -146,9 +164,9 @@ export async function withTempTmuxSession<T>(
   } finally {
     try {
       if (serverKind === 'synthetic') {
-        runTmux(['kill-server'], tmuxOptions);
+        runFixtureServerTmux(['kill-server'], serverName || undefined);
       } else {
-        runTmux(['kill-session', '-t', sessionName], tmuxOptions);
+        runFixtureServerTmux(['kill-session', '-t', sessionName], serverName || undefined);
       }
     } catch {}
     await rm(fixtureCwd, { recursive: true, force: true });

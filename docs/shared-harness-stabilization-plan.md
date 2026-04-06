@@ -1,5 +1,17 @@
 # Shared Harness Stabilization Plan
 
+Superseded:
+
+- This document is now a historical planning note and is no longer an active source of truth.
+- The remaining active scopes were split into:
+  - [debug-trace-boundary-separation-master-plan-2026-04-06.md](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/docs/qa/debug-trace-boundary-separation-master-plan-2026-04-06.md)
+    - notify/tmux fake runner harness
+    - team/tmux session fixture boundary cleanup
+    - user/home-scoped write-path normalization
+  - [team-env-threading-followup-2026-04-06.md](/Users/cantecim/Desktop/Projects/Myself/oh-my-codex/docs/qa/team-env-threading-followup-2026-04-06.md)
+    - deferred production env-threading follow-up
+- Read this document for historical context only, not for current planning authority.
+
 ## Summary
 
 Amaç: "bir yeri düzeltince başka yer bozuluyor" döngüsünü kırmak. Bunu test-by-test değil, ortak harness/state surfaces üzerinden yapacağız. Planın temel yaklaşımı:
