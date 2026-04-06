@@ -10,15 +10,16 @@ describe('ralplan runtime BMAD contract', () => {
   it('annotates ralplan state with BMAD readiness metadata when BMAD artifacts exist', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-ralplan-runtime-bmad-'));
     const sessionId = 'sess-ralplan-bmad';
+    const outputRoot = '_bmad-output';
     try {
       await mkdir(join(cwd, '.omx', 'state'), { recursive: true });
       await writeFile(join(cwd, '.omx', 'state', 'session.json'), JSON.stringify({ session_id: sessionId }));
-      await mkdir(join(cwd, '_bmad-output', 'planning-artifacts', 'epics'), { recursive: true });
-      await mkdir(join(cwd, '_bmad-output', 'implementation-artifacts'), { recursive: true });
-      await writeFile(join(cwd, '_bmad-output', 'planning-artifacts', 'PRD.md'), '# PRD\n');
-      await writeFile(join(cwd, '_bmad-output', 'planning-artifacts', 'architecture.md'), '# Architecture\n');
-      await writeFile(join(cwd, '_bmad-output', 'planning-artifacts', 'epics', 'story-login.md'), '# Story\n');
-      await writeFile(join(cwd, '_bmad-output', 'implementation-artifacts', 'sprint-status.yaml'), 'stories:\n');
+      await mkdir(join(cwd, outputRoot, 'planning-artifacts', 'epics'), { recursive: true });
+      await mkdir(join(cwd, outputRoot, 'implementation-artifacts'), { recursive: true });
+      await writeFile(join(cwd, outputRoot, 'planning-artifacts', 'PRD.md'), '# PRD\n');
+      await writeFile(join(cwd, outputRoot, 'planning-artifacts', 'architecture.md'), '# Architecture\n');
+      await writeFile(join(cwd, outputRoot, 'planning-artifacts', 'epics', 'story-login.md'), '# Story\n');
+      await writeFile(join(cwd, outputRoot, 'implementation-artifacts', 'sprint-status.yaml'), 'stories:\n');
 
       const result = await runRalplanConsensus({
         async draft() {

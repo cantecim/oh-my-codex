@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { recordStoryCompletion } from '../../integrations/bmad/writeback.js';
+import { buildBmadFixtureRefs, createBmadProject } from '../../test-support/bmad-fixture.js';
 import {
   persistBmadActiveSelection,
   readPersistedBmadIntegrationState,
@@ -11,32 +12,6 @@ import {
 } from '../../integrations/bmad/reconcile.js';
 import { runAutopilotWithRouting, runBmadAutopilotCampaign } from '../bmad-autopilot.js';
 import type { PipelineStage } from '../types.js';
-
-async function createBmadProject(root: string, options: {
-  stories?: string[];
-  includePrd?: boolean;
-  includeArchitecture?: boolean;
-  sprintStatus?: string;
-} = {}): Promise<void> {
-  const stories = options.stories ?? ['_bmad-output/planning-artifacts/epics/story-login.md'];
-  await mkdir(join(root, '_bmad-output', 'planning-artifacts', 'epics'), { recursive: true });
-  await mkdir(join(root, '_bmad-output', 'implementation-artifacts'), { recursive: true });
-  await writeFile(join(root, '_bmad-output', 'project-context.md'), '# Context\n');
-  await writeFile(join(root, '_bmad-output', 'planning-artifacts', 'epics', 'epic-auth.md'), '# Epic\n');
-  if (options.includePrd !== false) {
-    await writeFile(join(root, '_bmad-output', 'planning-artifacts', 'PRD.md'), '# PRD\n');
-  }
-  if (options.includeArchitecture !== false) {
-    await writeFile(join(root, '_bmad-output', 'planning-artifacts', 'architecture.md'), '# Architecture\n');
-  }
-  for (const storyPath of stories) {
-    await writeFile(join(root, storyPath), '# Story\n');
-  }
-  await writeFile(
-    join(root, '_bmad-output', 'implementation-artifacts', 'sprint-status.yaml'),
-    options.sprintStatus ?? 'stories:\n',
-  );
-}
 
 describe('BMAD autopilot routing', () => {
   it('preserves the generic autopilot pipeline path for non-BMAD repos', async () => {
@@ -90,8 +65,9 @@ describe('BMAD autopilot campaign loop', () => {
   it('completes a single-story BMAD campaign through the Ralph backend', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
     try {
-      const storyPath = '_bmad-output/planning-artifacts/epics/story-login.md';
-      await createBmadProject(root, { stories: [storyPath] });
+      const refs = buildBmadFixtureRefs();
+      const storyPath = refs.storyPath;
+      await createBmadProject(root);
 
       const result = await runBmadAutopilotCampaign({
         task: 'ship the current BMAD story',
@@ -123,15 +99,16 @@ describe('BMAD autopilot campaign loop', () => {
   it('stops with ambiguity after one completed story when multiple unresolved stories remain', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
     try {
+      const refs = buildBmadFixtureRefs();
       const stories = [
-        '_bmad-output/planning-artifacts/epics/story-login.md',
-        '_bmad-output/planning-artifacts/epics/story-profile.md',
+        refs.storyPath,
+        `${refs.outputRoot}/planning-artifacts/epics/story-profile.md`,
       ];
-      await createBmadProject(root, { stories, sprintStatus: 'stories:\n' });
+      await createBmadProject(root, { stories: stories.map((path) => ({ path })), sprintStatus: 'stories:\n' });
       await reconcileBmadIntegrationState(root);
       await persistBmadActiveSelection(root, {
         activeStoryRef: stories[0],
-        activeEpicRef: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+        activeEpicRef: refs.epicPath,
       });
 
       const result = await runBmadAutopilotCampaign({
@@ -146,7 +123,7 @@ describe('BMAD autopilot campaign loop', () => {
               verificationSummary: 'verified',
             });
             if (selectedStory === stories[0]) {
-              const extraStory = '_bmad-output/planning-artifacts/epics/story-security.md';
+              const extraStory = `${refs.outputRoot}/planning-artifacts/epics/story-security.md`;
               await writeFile(join(cwd, extraStory), '# Story\n');
             }
             return { status: 'completed' };
@@ -166,8 +143,9 @@ describe('BMAD autopilot campaign loop', () => {
   it('supports explicit team backend selection through injected executors', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
     try {
-      const storyPath = '_bmad-output/planning-artifacts/epics/story-login.md';
-      await createBmadProject(root, { stories: [storyPath] });
+      const refs = buildBmadFixtureRefs();
+      const storyPath = refs.storyPath;
+      await createBmadProject(root);
       let teamInvoked = false;
 
       const result = await runBmadAutopilotCampaign({
@@ -196,11 +174,44 @@ describe('BMAD autopilot campaign loop', () => {
     }
   });
 
+  for (const outputRoot of ['_bmad-output', 'docs']) {
+    it(`completes a configured-root BMAD campaign through the Ralph backend (${outputRoot})`, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
+      try {
+        const refs = buildBmadFixtureRefs(outputRoot);
+        const storyPath = refs.storyPath;
+        await createBmadProject(root, { outputRoot: refs.outputRoot });
+
+        const result = await runBmadAutopilotCampaign({
+          task: `ship the ${outputRoot} BMAD story`,
+          cwd: root,
+          executors: {
+            async ralph({ cwd, storyPath: selectedStory }) {
+              await recordStoryCompletion(cwd, {
+                storyPath: selectedStory,
+                completedAt: new Date().toISOString(),
+                mode: 'ralph',
+                verificationSummary: 'verified',
+              });
+              return { status: 'completed' };
+            },
+          },
+        });
+
+        assert.equal(result.status, 'completed');
+        assert.deepEqual(result.completedStoryPaths, [storyPath]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
   it('supports explicit BMAD-native backend selection through the compatibility executor', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
     try {
-      const storyPath = '_bmad-output/planning-artifacts/epics/story-login.md';
-      await createBmadProject(root, { stories: [storyPath] });
+      const refs = buildBmadFixtureRefs();
+      const storyPath = refs.storyPath;
+      await createBmadProject(root);
       let nativeInvoked = false;
 
       const result = await runBmadAutopilotCampaign({
@@ -236,9 +247,10 @@ describe('BMAD autopilot campaign loop', () => {
   it('writes an epic retrospective hook when the epic is fully complete', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-bmad-autopilot-'));
     try {
-      const epicPath = '_bmad-output/planning-artifacts/epics/epic-auth.md';
-      const storyPath = '_bmad-output/planning-artifacts/epics/story-epic-auth-login.md';
-      await createBmadProject(root, { stories: [storyPath] });
+      const refs = buildBmadFixtureRefs();
+      const epicPath = refs.epicPath;
+      const storyPath = `${refs.outputRoot}/planning-artifacts/epics/story-epic-auth-login.md`;
+      await createBmadProject(root, { stories: [{ path: storyPath }] });
       await writeFile(join(root, epicPath), '# Epic\n');
 
       const result = await runBmadAutopilotCampaign({

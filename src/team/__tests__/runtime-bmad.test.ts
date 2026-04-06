@@ -12,6 +12,7 @@ describe('team runtime BMAD contract', () => {
     const repo = await mkdtemp(join(tmpdir(), 'team-detached-worktree-paths-'));
     const binDir = await mkdtemp(join(tmpdir(), 'omx-runtime-bmad-bin-'));
     const fakeCodexPath = join(binDir, 'codex');
+    const outputRoot = '_bmad-output';
     let runtime: TeamRuntime | null = null;
     try {
       execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
@@ -49,14 +50,14 @@ process.on('SIGTERM', () => process.exit(0));
           }),
           bmadContext: {
             detected: true,
-            outputRoot: '_bmad-output',
-            projectContextPath: '_bmad-output/project-context.md',
-            architecturePaths: ['_bmad-output/planning-artifacts/architecture.md'],
-            activeStoryPath: '_bmad-output/planning-artifacts/epics/story-login.md',
-            activeEpicPath: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+            outputRoot,
+            projectContextPath: `${outputRoot}/project-context.md`,
+            architecturePaths: [`${outputRoot}/planning-artifacts/architecture.md`],
+            activeStoryPath: `${outputRoot}/planning-artifacts/epics/story-login.md`,
+            activeEpicPath: `${outputRoot}/planning-artifacts/epics/epic-auth.md`,
             storyAcceptanceCriteria: ['user can log in'],
-            sprintStatusPath: '_bmad-output/implementation-artifacts/sprint-status.yaml',
-            implementationArtifactsRoot: '_bmad-output/implementation-artifacts',
+            sprintStatusPath: `${outputRoot}/implementation-artifacts/sprint-status.yaml`,
+            implementationArtifactsRoot: `${outputRoot}/implementation-artifacts`,
             contextBlockedByAmbiguity: false,
             writebackSupported: true,
             writebackBlockedByDrift: false,

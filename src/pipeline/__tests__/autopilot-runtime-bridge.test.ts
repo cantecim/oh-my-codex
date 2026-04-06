@@ -5,33 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runAutopilotSkillRuntimeBridge } from '../autopilot-runtime-bridge.js';
 import { recordStoryCompletion } from '../../integrations/bmad/writeback.js';
+import { buildBmadFixtureRefs, createBmadProject } from '../../test-support/bmad-fixture.js';
 import { persistBmadActiveSelection, reconcileBmadIntegrationState } from '../../integrations/bmad/reconcile.js';
-
-async function createBmadProject(root: string, options: {
-  stories?: string[];
-  includePrd?: boolean;
-  includeArchitecture?: boolean;
-  outputRoot?: string;
-} = {}): Promise<void> {
-  const outputRoot = options.outputRoot ?? '_bmad-output';
-  const stories = options.stories ?? [`${outputRoot}/planning-artifacts/epics/story-login.md`];
-  await mkdir(join(root, '_bmad', 'core'), { recursive: true });
-  await writeFile(join(root, '_bmad', 'core', 'config.yaml'), `output_folder: ${JSON.stringify(outputRoot)}\n`);
-  await mkdir(join(root, outputRoot, 'planning-artifacts', 'epics'), { recursive: true });
-  await mkdir(join(root, outputRoot, 'implementation-artifacts'), { recursive: true });
-  await writeFile(join(root, outputRoot, 'project-context.md'), '# Context\n');
-  await writeFile(join(root, outputRoot, 'planning-artifacts', 'epics', 'epic-auth.md'), '# Epic\n');
-  if (options.includePrd !== false) {
-    await writeFile(join(root, outputRoot, 'planning-artifacts', 'PRD.md'), '# PRD\n');
-  }
-  if (options.includeArchitecture !== false) {
-    await writeFile(join(root, outputRoot, 'planning-artifacts', 'architecture.md'), '# Architecture\n');
-  }
-  for (const storyPath of stories) {
-    await writeFile(join(root, storyPath), '# Story\n');
-  }
-  await writeFile(join(root, outputRoot, 'implementation-artifacts', 'sprint-status.yaml'), 'stories:\n');
-}
 
 describe('autopilot skill/runtime bridge', () => {
   it('uses the generic autopilot pipeline on non-BMAD repositories', async () => {
@@ -75,8 +50,9 @@ describe('autopilot skill/runtime bridge', () => {
   it('enters BMAD campaign mode on execution-ready repositories through the bridge', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-autopilot-bridge-'));
     try {
-      const storyPath = '_bmad-output/planning-artifacts/epics/story-login.md';
-      await createBmadProject(root, { stories: [storyPath] });
+      const refs = buildBmadFixtureRefs();
+      const storyPath = refs.storyPath;
+      await createBmadProject(root);
 
       const result = await runAutopilotSkillRuntimeBridge({
         task: 'ship the current BMAD story',
@@ -102,53 +78,56 @@ describe('autopilot skill/runtime bridge', () => {
     }
   });
 
-  it('uses the configured BMAD output_folder for campaign execution and writeback artifacts', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'omx-autopilot-bridge-'));
-    try {
-      const outputRoot = '.custom-bmad-output';
-      const storyPath = `${outputRoot}/planning-artifacts/epics/story-login.md`;
-      await createBmadProject(root, { outputRoot, stories: [storyPath] });
+  for (const outputRoot of ['_bmad-output', 'docs']) {
+    it(`uses the configured BMAD output_folder for campaign execution and writeback artifacts (${outputRoot})`, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'omx-autopilot-bridge-'));
+      try {
+        const refs = buildBmadFixtureRefs(outputRoot);
+        const storyPath = refs.storyPath;
+        await createBmadProject(root, { outputRoot });
 
-      const result = await runAutopilotSkillRuntimeBridge({
-        task: 'ship the configured BMAD story',
-        cwd: root,
-        executors: {
-          async ralph({ cwd, storyPath: selectedStory }) {
-            const hookPath = join(cwd, outputRoot, 'implementation-artifacts', 'omx-story-hook-story-login.md');
-            await recordStoryCompletion(cwd, {
-              storyPath: selectedStory,
-              completedAt: new Date().toISOString(),
-              mode: 'ralph',
-              verificationSummary: 'verified',
-              implementationArtifactPaths: [`${outputRoot}/implementation-artifacts/omx-story-hook-story-login.md`],
-            });
-            await writeFile(hookPath, '# OMX Implementation Summary\n');
-            return { status: 'completed' };
+        const result = await runAutopilotSkillRuntimeBridge({
+          task: `ship the configured ${outputRoot} BMAD story`,
+          cwd: root,
+          executors: {
+            async ralph({ cwd, storyPath: selectedStory }) {
+              const hookPath = join(cwd, outputRoot, 'implementation-artifacts', 'omx-story-hook-story-login.md');
+              await recordStoryCompletion(cwd, {
+                storyPath: selectedStory,
+                completedAt: new Date().toISOString(),
+                mode: 'ralph',
+                verificationSummary: 'verified',
+                implementationArtifactPaths: [`${outputRoot}/implementation-artifacts/omx-story-hook-story-login.md`],
+              });
+              await writeFile(hookPath, '# OMX Implementation Summary\n');
+              return { status: 'completed' };
+            },
           },
-        },
-      });
+        });
 
-      assert.equal(result.status, 'completed');
-      assert.deepEqual('completedStoryPaths' in result ? result.completedStoryPaths : [], [storyPath]);
-      const hookContent = await readFile(join(root, outputRoot, 'implementation-artifacts', 'omx-story-hook-story-login.md'), 'utf-8');
-      assert.match(hookContent, /# OMX Implementation Summary/);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        assert.equal(result.status, 'completed');
+        assert.deepEqual('completedStoryPaths' in result ? result.completedStoryPaths : [], [storyPath]);
+        const hookContent = await readFile(join(root, outputRoot, 'implementation-artifacts', 'omx-story-hook-story-login.md'), 'utf-8');
+        assert.match(hookContent, /# OMX Implementation Summary/);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   it('stops on ambiguous BMAD story resolution without guessing through the bridge', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-autopilot-bridge-'));
     try {
+      const refs = buildBmadFixtureRefs();
       const stories = [
-        '_bmad-output/planning-artifacts/epics/story-login.md',
-        '_bmad-output/planning-artifacts/epics/story-profile.md',
+        refs.storyPath,
+        `${refs.outputRoot}/planning-artifacts/epics/story-profile.md`,
       ];
-      await createBmadProject(root, { stories });
+      await createBmadProject(root, { stories: stories.map((path) => ({ path })) });
       await reconcileBmadIntegrationState(root);
       await persistBmadActiveSelection(root, {
         activeStoryRef: stories[0],
-        activeEpicRef: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+        activeEpicRef: refs.epicPath,
       });
 
       const result = await runAutopilotSkillRuntimeBridge({
@@ -162,7 +141,7 @@ describe('autopilot skill/runtime bridge', () => {
               mode: 'ralph',
               verificationSummary: 'verified',
             });
-            await writeFile(join(cwd, '_bmad-output/planning-artifacts/epics/story-security.md'), '# Story\n');
+            await writeFile(join(cwd, refs.outputRoot, 'planning-artifacts', 'epics', 'story-security.md'), '# Story\n');
             return { status: 'completed' };
           },
         },
@@ -182,15 +161,16 @@ describe('autopilot skill/runtime bridge', () => {
   it('stops in a degraded blocked state when hard BMAD drift occurs through the bridge', async () => {
     const root = await mkdtemp(join(tmpdir(), 'omx-autopilot-bridge-'));
     try {
-      const storyPath = '_bmad-output/planning-artifacts/epics/story-login.md';
-      await createBmadProject(root, { stories: [storyPath] });
+      const refs = buildBmadFixtureRefs();
+      const storyPath = refs.storyPath;
+      await createBmadProject(root);
 
       const result = await runAutopilotSkillRuntimeBridge({
         task: 'ship the current BMAD story',
         cwd: root,
         executors: {
           async ralph({ cwd }) {
-            await rm(join(cwd, '_bmad-output'), { recursive: true, force: true });
+            await rm(join(cwd, refs.outputRoot), { recursive: true, force: true });
             return { status: 'completed' };
           },
         },

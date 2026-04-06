@@ -125,12 +125,16 @@ export async function buildBmadArtifactIndex(projectRoot: string): Promise<BmadA
   for (const fullPath of planningFiles) {
     const relPath = normalizedRelativePath(projectRoot, fullPath);
     const fileName = basename(fullPath);
+    const inEpicsDirectory = relPath.includes('/planning-artifacts/epics/');
+    const isEpic = EPIC_PATTERN.test(fileName);
 
     if (PRD_PATTERN.test(fileName)) prdPaths.push(relPath);
     if (UX_PATTERN.test(fileName)) uxPaths.push(relPath);
     if (ARCHITECTURE_PATTERN.test(fileName)) architecturePaths.push(relPath);
-    if (EPIC_PATTERN.test(fileName)) epicPaths.push(relPath);
-    if (STORY_PATTERN.test(fileName)) storyPaths.push(relPath);
+    if (isEpic) epicPaths.push(relPath);
+    if (STORY_PATTERN.test(fileName) || (inEpicsDirectory && !isEpic)) {
+      storyPaths.push(relPath);
+    }
   }
 
   for (const fullPath of implementationFiles) {

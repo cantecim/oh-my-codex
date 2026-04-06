@@ -3,16 +3,18 @@ import assert from 'node:assert/strict';
 import { buildRalphAppendInstructions } from '../ralph.js';
 import type { BmadExecutionContext } from '../../integrations/bmad/contracts.js';
 
+const outputRoot = '_bmad-output';
+
 const bmadContext: BmadExecutionContext = {
   detected: true,
-  outputRoot: '_bmad-output',
-  projectContextPath: '_bmad-output/project-context.md',
-  architecturePaths: ['_bmad-output/planning-artifacts/architecture.md'],
-  activeStoryPath: '_bmad-output/planning-artifacts/epics/story-login.md',
-  activeEpicPath: '_bmad-output/planning-artifacts/epics/epic-auth.md',
+  outputRoot,
+  projectContextPath: `${outputRoot}/project-context.md`,
+  architecturePaths: [`${outputRoot}/planning-artifacts/architecture.md`],
+  activeStoryPath: `${outputRoot}/planning-artifacts/epics/story-login.md`,
+  activeEpicPath: `${outputRoot}/planning-artifacts/epics/epic-auth.md`,
   storyAcceptanceCriteria: ['user can log in', 'errors are shown'],
-  sprintStatusPath: '_bmad-output/implementation-artifacts/sprint-status.yaml',
-  implementationArtifactsRoot: '_bmad-output/implementation-artifacts',
+  sprintStatusPath: `${outputRoot}/implementation-artifacts/sprint-status.yaml`,
+  implementationArtifactsRoot: `${outputRoot}/implementation-artifacts`,
   contextBlockedByAmbiguity: false,
   writebackSupported: true,
   writebackBlockedByDrift: false,
