@@ -64,7 +64,7 @@ function dispatchCase(
   });
 }
 
-describe('notify-hook team dispatch consumer', { concurrency: false }, () => {
+describe('notify-hook team dispatch consumer', () => {
   dispatchCase('marks pending request as notified and preserves mailbox notified_at semantics', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
