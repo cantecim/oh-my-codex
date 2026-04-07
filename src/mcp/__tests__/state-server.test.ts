@@ -5,6 +5,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildChildEnv } from '../../test-support/shared-harness.js';
+import { buildBmadFixtureRefs, createBmadProject } from '../../test-support/bmad-fixture.js';
+import { getBmadArtifactIndexPath, getBmadStatePath } from '../../state/paths.js';
 
 async function loadStateServerModule() {
   return import(`../state-server.js?disableAutoStart=1&ts=${Date.now()}`);
@@ -222,6 +224,139 @@ describe('state-server directory initialization', () => {
       for (let i = 0; i < 16; i++) {
         assert.equal(state[`k${i}`], i);
       }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('reconciles canonical BMAD state before BMAD-aware autopilot state writes', async () => {
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-bmad-'));
+    try {
+      const refs = buildBmadFixtureRefs('docs');
+      await createBmadProject(wd, { outputRoot: 'docs' });
+      const testEnv = buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' });
+
+      const response = await handleStateToolCallWithEnv({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'autopilot',
+            active: true,
+            current_phase: 'bmad-campaign',
+            state: {
+              bmad_detected: true,
+              bmad_ready_for_execution: false,
+              bmad_active_story_path: refs.storyPath,
+              bmad_active_epic_path: refs.epicPath,
+              bmad_context_blocked_by_ambiguity: true,
+            },
+          },
+        },
+      }, testEnv);
+
+      assert.equal(response.isError, undefined);
+
+      const canonicalState = JSON.parse(await readFile(getBmadStatePath(wd), 'utf-8')) as {
+        phase?: string;
+        activeStoryRef?: string | null;
+        activeEpicRef?: string | null;
+      };
+      const artifactIndex = JSON.parse(await readFile(getBmadArtifactIndexPath(wd), 'utf-8')) as {
+        outputRoot?: string | null;
+      };
+      const autopilotState = JSON.parse(await readFile(join(wd, '.omx', 'state', 'autopilot-state.json'), 'utf-8')) as {
+        bmad_detected?: boolean;
+        bmad_phase?: string;
+        bmad_ready_for_execution?: boolean;
+        bmad_active_story_path?: string | null;
+        bmad_active_epic_path?: string | null;
+        bmad_context_blocked_by_ambiguity?: boolean;
+      };
+
+      assert.equal(canonicalState.phase, 'implementation');
+      assert.equal(canonicalState.activeStoryRef, refs.storyPath);
+      assert.equal(canonicalState.activeEpicRef, refs.epicPath);
+      assert.equal(artifactIndex.outputRoot, 'docs');
+      assert.equal(autopilotState.bmad_detected, true);
+      assert.equal(autopilotState.bmad_phase, canonicalState.phase);
+      assert.equal(autopilotState.bmad_ready_for_execution, true);
+      assert.equal(autopilotState.bmad_active_story_path, canonicalState.activeStoryRef);
+      assert.equal(autopilotState.bmad_active_epic_path, canonicalState.activeEpicRef);
+      assert.equal(autopilotState.bmad_context_blocked_by_ambiguity, false);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('reconciles canonical BMAD state before BMAD-aware Ralph state writes', async () => {
+    const { handleStateToolCallWithEnv } = await loadStateServerModule();
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-bmad-'));
+    try {
+      const refs = buildBmadFixtureRefs();
+      await createBmadProject(wd);
+      const testEnv = buildChildEnv(wd, { OMX_STATE_SERVER_DISABLE_AUTO_START: '1' });
+
+      const response = await handleStateToolCallWithEnv({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'ralph',
+            active: true,
+            current_phase: 'executing',
+            state: {
+              bmad_detected: true,
+              bmad_story_path: refs.storyPath,
+              bmad_epic_path: refs.epicPath,
+              bmad_sprint_status_path: refs.sprintStatusPath,
+              bmad_acceptance_criteria: [],
+              bmad_writeback_supported: false,
+              bmad_writeback_blocked: true,
+              bmad_implementation_artifacts_root: refs.implementationArtifactsRoot,
+            },
+          },
+        },
+      }, testEnv);
+
+      assert.equal(response.isError, undefined);
+
+      const canonicalState = JSON.parse(await readFile(getBmadStatePath(wd), 'utf-8')) as {
+        phase?: string;
+        activeStoryRef?: string | null;
+        activeEpicRef?: string | null;
+      };
+      const artifactIndex = JSON.parse(await readFile(getBmadArtifactIndexPath(wd), 'utf-8')) as {
+        outputRoot?: string | null;
+      };
+      const ralphState = JSON.parse(await readFile(join(wd, '.omx', 'state', 'ralph-state.json'), 'utf-8')) as {
+        bmad_detected?: boolean;
+        bmad_phase?: string;
+        bmad_story_path?: string | null;
+        bmad_epic_path?: string | null;
+        bmad_sprint_status_path?: string | null;
+        bmad_acceptance_criteria?: string[];
+        bmad_writeback_supported?: boolean;
+        bmad_writeback_blocked?: boolean;
+        bmad_implementation_artifacts_root?: string | null;
+      };
+
+      assert.equal(canonicalState.phase, 'implementation');
+      assert.equal(canonicalState.activeStoryRef, refs.storyPath);
+      assert.equal(canonicalState.activeEpicRef, refs.epicPath);
+      assert.equal(artifactIndex.outputRoot, refs.outputRoot);
+      assert.equal(ralphState.bmad_detected, true);
+      assert.equal(ralphState.bmad_phase, canonicalState.phase);
+      assert.equal(ralphState.bmad_story_path, canonicalState.activeStoryRef);
+      assert.equal(ralphState.bmad_epic_path, canonicalState.activeEpicRef);
+      assert.equal(ralphState.bmad_sprint_status_path, refs.sprintStatusPath);
+      assert.deepEqual(ralphState.bmad_acceptance_criteria, []);
+      assert.equal(ralphState.bmad_writeback_supported, true);
+      assert.equal(ralphState.bmad_writeback_blocked, false);
+      assert.equal(ralphState.bmad_implementation_artifacts_root, refs.implementationArtifactsRoot);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

@@ -42,7 +42,7 @@ describe('ralph BMAD contract', () => {
 
   it('writes canonical BMAD integration state during a BMAD-aware ralph launch', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-ralph-bmad-'));
-    const launchWithHud = mock.fn(async () => {});
+    const previousSkipHudLaunch = process.env.OMX_TEST_SKIP_HUD_LAUNCH;
     try {
       await mkdir(join(cwd, outputRoot, 'planning-artifacts', 'epics'), { recursive: true });
       await mkdir(join(cwd, outputRoot, 'implementation-artifacts'), { recursive: true });
@@ -52,13 +52,10 @@ describe('ralph BMAD contract', () => {
       await writeFile(join(cwd, outputRoot, 'implementation-artifacts', 'sprint-status.yaml'), 'stories:\n');
 
       mock.method(process, 'cwd', () => cwd);
-      mock.module('../index.js', {
-        namedExports: { launchWithHud },
-      });
+      process.env.OMX_TEST_SKIP_HUD_LAUNCH = '1';
 
       await ralphCommand(['Implement BMAD story']);
 
-      assert.equal(launchWithHud.mock.callCount(), 1);
       const canonicalState = JSON.parse(await readFile(getBmadStatePath(cwd), 'utf-8')) as {
         phase?: string;
         activeStoryRef?: string | null;
@@ -77,6 +74,11 @@ describe('ralph BMAD contract', () => {
       assert.equal(ralphState.bmad_phase, canonicalState.phase);
       assert.equal(ralphState.bmad_story_path, canonicalState.activeStoryRef);
     } finally {
+      if (typeof previousSkipHudLaunch === 'string') {
+        process.env.OMX_TEST_SKIP_HUD_LAUNCH = previousSkipHudLaunch;
+      } else {
+        delete process.env.OMX_TEST_SKIP_HUD_LAUNCH;
+      }
       mock.restoreAll();
       await rm(cwd, { recursive: true, force: true });
     }

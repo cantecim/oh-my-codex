@@ -70,6 +70,7 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 0.5 **BMAD routing gate (evaluate before entering the standard non-BMAD phase stack when BMAD artifacts are present)**:
    - Detect BMAD from `_bmad/`, `_bmad/core/config.yaml`, the configured `output_folder` (fallback `_bmad-output`), `project-context.md`, planning artifacts, and implementation artifacts.
    - Reconcile BMAD integration state before choosing a path.
+   - Treat `.omx/state/integrations/bmad.json` and `.omx/state/integrations/bmad-artifact-index.json` as the canonical BMAD runtime boundary for all BMAD-aware autopilot work.
    - If BMAD is detected but **not** execution-ready:
      - stop before expansion/planning-heavy implementation flow begins
      - report the missing BMAD workflow category:
@@ -180,7 +181,7 @@ Use `omx_state` MCP tools for autopilot lifecycle state.
   - `bmad_drift_recovery_reason`
   - `bmad_last_hook_artifact_paths`
 
-  These are OMX runtime/projection fields. They do not replace BMAD artifact authority.
+  These are OMX runtime/projection fields. They do not replace BMAD artifact authority, and they must stay consistent with canonical BMAD integration state under `.omx/state/integrations/`.
 - **On completion**:
   `state_write({mode: "autopilot", active: false, current_phase: "complete", completed_at: "<now>"})`
 - **On cancellation/cleanup**:

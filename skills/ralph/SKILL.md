@@ -70,6 +70,7 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 2. **Continue from where you left off**: Pick up incomplete tasks
 2.5 **BMAD context gate (when BMAD is detected)**:
    - Reconcile BMAD integration state
+   - Treat canonical BMAD integration artifacts under `.omx/state/integrations/` as the required persistence boundary for BMAD-aware Ralph work
    - Resolve execution context:
      - project-context path
      - architecture paths
@@ -128,6 +129,8 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - Persist context snapshot path in Ralph mode state so later phases and agents share the same grounding context
 - When BMAD is present, persist additive state alongside normal Ralph lifecycle updates, for example:
   `state_write({mode: "ralph", current_phase: "executing", state: {bmad_detected: true, bmad_story_path: "<story-path>", bmad_epic_path: "<epic-path>", bmad_sprint_status_path: "<sprint-status-path>"}})`
+
+  BMAD-aware `state_write` calls must not become an alternate source of truth. They are additive runtime fields layered on top of canonical BMAD reconciliation and must stay consistent with `.omx/state/integrations/bmad.json` and `.omx/state/integrations/bmad-artifact-index.json`.
 
   Typical additive BMAD fields include:
   - `bmad_detected`

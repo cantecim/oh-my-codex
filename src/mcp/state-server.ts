@@ -61,6 +61,131 @@ const STATE_TOOL_NAMES = new Set([
 const TEAM_COMM_TOOL_NAMES: Set<string> = new Set([...LEGACY_TEAM_MCP_TOOLS]);
 
 const stateWriteQueues = new Map<string, Promise<void>>();
+const BMAD_STATE_SERVER_MODES = new Set(["autopilot", "ralph", "ralplan", "team"]);
+
+function hasOwnField(
+	record: Record<string, unknown>,
+	key: string,
+): boolean {
+	return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function hasBmadStateHints(
+	mode: string,
+	record: Record<string, unknown>,
+): boolean {
+	if (!BMAD_STATE_SERVER_MODES.has(mode)) {
+		return false;
+	}
+	if (record.bmad_detected === true) {
+		return true;
+	}
+	return Object.keys(record).some((key) => key.startsWith("bmad_"));
+}
+
+function normalizeOptionalBmadRef(value: unknown): string | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+async function reconcileBmadStateWrite(
+	cwd: string,
+	mergedRaw: Record<string, unknown>,
+): Promise<void> {
+	const { ensureBmadIntegrationState, persistBmadActiveSelection } = await import(
+		"../integrations/bmad/reconcile.js"
+	);
+	const { deriveBmadReadiness } = await import(
+		"../integrations/bmad/readiness.js"
+	);
+	const { resolveBmadExecutionContext } = await import(
+		"../integrations/bmad/context.js"
+	);
+
+	let reconciled = await ensureBmadIntegrationState(cwd);
+	const hasStorySelection =
+		hasOwnField(mergedRaw, "bmad_active_story_path") ||
+		hasOwnField(mergedRaw, "bmad_story_path");
+	const hasEpicSelection =
+		hasOwnField(mergedRaw, "bmad_active_epic_path") ||
+		hasOwnField(mergedRaw, "bmad_epic_path");
+
+	if (hasStorySelection || hasEpicSelection) {
+		const nextState = await persistBmadActiveSelection(cwd, {
+			activeStoryRef: hasOwnField(mergedRaw, "bmad_active_story_path")
+				? normalizeOptionalBmadRef(mergedRaw.bmad_active_story_path)
+				: hasOwnField(mergedRaw, "bmad_story_path")
+					? normalizeOptionalBmadRef(mergedRaw.bmad_story_path)
+					: reconciled.state.activeStoryRef,
+			activeEpicRef: hasOwnField(mergedRaw, "bmad_active_epic_path")
+				? normalizeOptionalBmadRef(mergedRaw.bmad_active_epic_path)
+				: hasOwnField(mergedRaw, "bmad_epic_path")
+					? normalizeOptionalBmadRef(mergedRaw.bmad_epic_path)
+					: reconciled.state.activeEpicRef,
+		});
+		if (nextState) {
+			reconciled = { ...reconciled, state: nextState };
+		}
+	}
+
+	const readiness = deriveBmadReadiness(
+		reconciled.artifactIndex,
+		reconciled.state,
+	);
+	const context = await resolveBmadExecutionContext(
+		cwd,
+		reconciled.artifactIndex,
+		reconciled.state,
+	);
+
+	mergedRaw.bmad_detected = reconciled.state.detected;
+	mergedRaw.bmad_phase = reconciled.state.phase;
+
+	if (
+		hasOwnField(mergedRaw, "bmad_ready_for_execution") ||
+		hasOwnField(mergedRaw, "bmad_gap_summary")
+	) {
+		mergedRaw.bmad_ready_for_execution = readiness.readyForExecution;
+	}
+	if (hasOwnField(mergedRaw, "bmad_gap_summary")) {
+		mergedRaw.bmad_gap_summary = readiness.gapSummary;
+	}
+	if (hasOwnField(mergedRaw, "bmad_active_story_path")) {
+		mergedRaw.bmad_active_story_path = context.activeStoryPath;
+	}
+	if (hasOwnField(mergedRaw, "bmad_story_path")) {
+		mergedRaw.bmad_story_path = context.activeStoryPath;
+	}
+	if (hasOwnField(mergedRaw, "bmad_active_epic_path")) {
+		mergedRaw.bmad_active_epic_path = context.activeEpicPath;
+	}
+	if (hasOwnField(mergedRaw, "bmad_epic_path")) {
+		mergedRaw.bmad_epic_path = context.activeEpicPath;
+	}
+	if (hasOwnField(mergedRaw, "bmad_sprint_status_path")) {
+		mergedRaw.bmad_sprint_status_path = context.sprintStatusPath;
+	}
+	if (hasOwnField(mergedRaw, "bmad_acceptance_criteria")) {
+		mergedRaw.bmad_acceptance_criteria = context.storyAcceptanceCriteria;
+	}
+	if (hasOwnField(mergedRaw, "bmad_context_blocked_by_ambiguity")) {
+		mergedRaw.bmad_context_blocked_by_ambiguity =
+			context.contextBlockedByAmbiguity;
+	}
+	if (hasOwnField(mergedRaw, "bmad_writeback_supported")) {
+		mergedRaw.bmad_writeback_supported = context.writebackSupported;
+	}
+	if (hasOwnField(mergedRaw, "bmad_writeback_blocked")) {
+		mergedRaw.bmad_writeback_blocked = context.writebackBlockedByDrift;
+	}
+	if (hasOwnField(mergedRaw, "bmad_implementation_artifacts_root")) {
+		mergedRaw.bmad_implementation_artifacts_root =
+			context.implementationArtifactsRoot;
+	}
+}
 
 async function withStateWriteLock<T>(
 	path: string,
@@ -365,6 +490,10 @@ export async function handleStateToolCallWithEnv(request: {
 						}
 						Object.assign(mergedRaw, validation.state);
 						await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId);
+					}
+
+					if (hasBmadStateHints(mode, mergedRaw)) {
+						await reconcileBmadStateWrite(cwd, mergedRaw);
 					}
 
 					const merged = withModeRuntimeContext(existing, mergedRaw);

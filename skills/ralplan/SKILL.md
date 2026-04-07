@@ -68,6 +68,7 @@ The consensus workflow:
 
 When BMAD is detected:
 - reconcile BMAD integration state before planning or handoff
+- treat canonical BMAD integration files under `.omx/state/integrations/` as required runtime truth, not optional side effects
 - treat BMAD artifacts as delivery truth and Ralplan state/artifacts as additive runtime/handoff metadata
 - derive BMAD readiness from:
   - PRD presence

@@ -15,7 +15,15 @@ The remaining work is no longer about basic BMAD support. It is about closing th
 
 and about fixing one real production bug exposed by an actual BMAD project.
 
+Status update as of 2026-04-06:
+
+- BMAD `output_folder` placeholder resolution is now fixed in runtime/config handling
+- BMAD skill/runtime bridge enforcement is now fixed in the `omx_state` server for BMAD-aware `state_write` calls
+- remaining validation is production confirmation on real installed skill-driven runs, not repo-side implementation work
+
 ## 1. BMAD `output_folder` Placeholder Resolution Bug
+
+Status: implemented
 
 ### Problem
 
@@ -64,6 +72,8 @@ Expected behavior:
 - current BMAD regression gates remain green
 
 ## 2. BMAD Skill/Runtime Bridge Alignment
+
+Status: implemented in repo, pending real-run confirmation
 
 ### Problem
 
@@ -114,6 +124,17 @@ It may require:
 - real skill-driven `$ralph` runs leave the same canonical artifacts
 - mode-local `bmad_*` fields and canonical BMAD state do not drift apart
 
+### Implementation Notes
+
+Repo-side enforcement now happens in the `omx_state` MCP server:
+
+- BMAD-aware `state_write` calls for `autopilot`, `ralph`, `ralplan`, and `team`
+- force canonical BMAD reconcile first
+- persist explicit story/epic selections back into canonical BMAD state when a skill/runtime path supplies them
+- then normalize additive `bmad_*` mode-local fields from canonical BMAD state, readiness, and execution context
+
+This closes the skill/runtime bridge gap inside OMX even when a skill-driven flow writes BMAD mode-local state directly.
+
 ## Verification Strategy
 
 Verification for this follow-up must use both kinds of evidence:
@@ -131,8 +152,7 @@ Minimum proof bar:
 
 Priority order:
 
-1. BMAD `output_folder` placeholder resolution bug
-2. BMAD skill/runtime bridge alignment
+1. Real installed skill-driven validation of BMAD canonical reconcile artifacts
 
 Rationale:
 

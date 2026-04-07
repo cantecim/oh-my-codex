@@ -68,6 +68,20 @@ describe('BMAD detection', () => {
     });
   }
 
+  it('detects placeholder-based output_folder values after project-root normalization', async () => {
+    const root = await makeTempProject('omx-bmad-detect-');
+    try {
+      await writeProjectFile(root, '_bmad/core/config.yaml', 'output_folder: "{project-root}/docs"\n');
+      await mkdir(join(root, 'docs'), { recursive: true });
+      const detected = detectBmadProject(root);
+      assert.equal(detected.detected, true);
+      assert.ok(detected.detectionSignals.includes('_bmad/core/config.yaml'));
+      assert.ok(detected.detectionSignals.includes('docs'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('returns no detection for non-BMAD repositories', async () => {
     const root = await makeTempProject('omx-bmad-detect-');
     try {
@@ -143,6 +157,26 @@ describe('BMAD artifact indexing and projection', () => {
       }
     });
   }
+
+  it('indexes artifacts from placeholder-based output_folder values', async () => {
+    const root = await makeTempProject('omx-bmad-index-');
+    try {
+      await writeProjectFile(root, '_bmad/core/config.yaml', 'output_folder: "{project-root}/docs"\n');
+      await writeProjectFile(root, 'docs/project-context.md', '# context');
+      await writeProjectFile(root, 'docs/planning-artifacts/PRD.md', '# prd');
+      await writeProjectFile(root, 'docs/planning-artifacts/architecture.md', '# arch');
+      await writeProjectFile(root, 'docs/planning-artifacts/epics/3-5-instrument-wizard-progression-and-abandonment-events.md', '# story');
+      await writeProjectFile(root, 'docs/implementation-artifacts/sprint-status.yaml', 'status: active');
+
+      const index = await buildBmadArtifactIndex(root);
+      assert.equal(index.outputRoot, 'docs');
+      assert.equal(index.projectContextPath, 'docs/project-context.md');
+      assert.ok(index.storyPaths.includes('docs/planning-artifacts/epics/3-5-instrument-wizard-progression-and-abandonment-events.md'));
+      assert.deepEqual(index.sprintStatusPaths, ['docs/implementation-artifacts/sprint-status.yaml']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it('infers planning for PRD-only projects', async () => {
     const root = await makeTempProject('omx-bmad-phase-');

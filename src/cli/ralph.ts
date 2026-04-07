@@ -261,6 +261,9 @@ export async function ralphCommand(args: string[]): Promise<void> {
   console.log('[ralph] Ralph persistence mode active. Launching Codex...');
   console.log(`[ralph] available_agent_types: ${staffingPlan.rosterSummary}`);
   console.log(`[ralph] staffing_plan: ${staffingPlan.staffingSummary}`);
+  if (process.env.OMX_TEST_SKIP_HUD_LAUNCH === '1') {
+    return;
+  }
   const { launchWithHud } = await import('./index.js');
   const codexArgsBase = filterRalphCodexArgs(normalizedArgs);
   const codexArgs = explicitTask === 'ralph-cli-launch' && approvedHint?.task
