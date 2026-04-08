@@ -429,6 +429,19 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
   const match = detectPrimaryKeyword(prompt);
   if (!match) return null;
 
+  if (match.skill === "team") {
+    const initializedStateMessage = skillState?.initialized_mode && skillState.initialized_state_path
+      ? `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`
+      : null;
+    return [
+      `OMX native UserPromptSubmit detected workflow keyword "${match.keyword}" -> ${match.skill}.`,
+      initializedStateMessage,
+      "Use the durable OMX team runtime via `omx team ...` for coordinated execution; do not replace it with in-process fanout.",
+      "If you need help, run `omx team --help`.",
+      "Follow AGENTS.md routing and preserve ralplan/ralph execution gates.",
+    ].filter(Boolean).join(" ");
+  }
+
   if (skillState?.initialized_mode && skillState.initialized_state_path) {
     return [
       `OMX native UserPromptSubmit detected workflow keyword "${match.keyword}" -> ${match.skill}.`,

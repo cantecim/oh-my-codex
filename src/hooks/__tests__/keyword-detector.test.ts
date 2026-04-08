@@ -307,6 +307,74 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
+  it('seeds first-class root team state for team prompt-submit activation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-team-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$team coordinate the hotfix',
+        sessionId: 'sess-team',
+        nowIso: '2026-04-08T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'team');
+      assert.equal(result.initialized_mode, 'team');
+      assert.equal(result.initialized_state_path, '.omx/state/team-state.json');
+
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'team-state.json'), 'utf-8'),
+      ) as { mode: string; active: boolean; current_phase: string };
+      assert.equal(modeState.mode, 'team');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'starting');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves active team root state when $team is re-entered from prompt routing', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-team-preserve-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        join(stateDir, 'team-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'team',
+          current_phase: 'team-verify',
+          started_at: '2026-04-08T00:00:00.000Z',
+          updated_at: '2026-04-08T00:05:00.000Z',
+          team_name: 'review-team',
+        }, null, 2),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$team continue the review lane',
+        sessionId: 'sess-team-preserve',
+        nowIso: '2026-04-08T00:10:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.initialized_mode, 'team');
+      assert.equal(result.initialized_state_path, '.omx/state/team-state.json');
+
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'team-state.json'), 'utf-8'),
+      ) as { mode: string; active: boolean; current_phase: string; team_name?: string };
+      assert.equal(modeState.mode, 'team');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'team-verify');
+      assert.equal(modeState.team_name, 'review-team');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('acquires a deep-interview input lock immediately on activation', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-deep-interview-'));
     const stateDir = join(cwd, '.omx', 'state');

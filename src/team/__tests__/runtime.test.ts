@@ -677,6 +677,61 @@ sleep 5
     }
   });
 
+  it('startTeam rejects duplicate active same-name team state without mutating existing files', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-duplicate-team-'));
+    const prevSessionId = process.env.OMX_SESSION_ID;
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    try {
+      process.env.OMX_SESSION_ID = 'sess-existing-team';
+      await initTeamState(
+        'dup-team',
+        'existing task',
+        'executor',
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: 'sess-existing-team' },
+      );
+      await createTask('dup-team', {
+        subject: 'existing subject',
+        description: 'existing description',
+        status: 'pending',
+      }, cwd);
+
+      const beforeConfig = await readTeamConfig('dup-team', cwd);
+      assert.ok(beforeConfig);
+
+      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+      process.env.OMX_SESSION_ID = 'sess-second-team';
+
+      await assert.rejects(
+        () => withoutTeamWorkerEnv(() =>
+          startTeam(
+            'dup-team',
+            'replacement task',
+            'executor',
+            1,
+            [{ subject: 'new subject', description: 'new description', owner: 'worker-1' }],
+            cwd,
+          )),
+        /team_name_conflict: active team state already exists/,
+      );
+
+      const afterConfig = await readTeamConfig('dup-team', cwd);
+      const existingTask = await readTask('dup-team', '1', cwd);
+      assert.equal(afterConfig?.task, 'existing task');
+      assert.equal(afterConfig?.created_at, beforeConfig?.created_at);
+      assert.equal(existingTask?.subject, 'existing subject');
+      assert.equal(existingTask?.description, 'existing description');
+    } finally {
+      if (typeof prevSessionId === 'string') process.env.OMX_SESSION_ID = prevSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('skips interactive worker process-tree prekill on native Windows split-pane sessions', async () => {
     await withNativeWindowsPlatform(async () => {
       assert.equal(shouldPrekillInteractiveShutdownProcessTrees('leader:0'), false);

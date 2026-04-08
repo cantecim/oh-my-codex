@@ -210,6 +210,42 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("nudges $team prompt-submit routing toward omx team runtime usage", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-team-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-team-1",
+          thread_id: "thread-team-1",
+          turn_id: "turn-team-1",
+          prompt: "$team ship this fix with verification",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState?.skill, "team");
+      assert.match(
+        JSON.stringify(result.outputJson),
+        /skill: team activated and initial state initialized at \.omx\/state\/team-state\.json; write subsequent updates via omx_state MCP\./,
+      );
+      assert.match(JSON.stringify(result.outputJson), /Use the durable OMX team runtime via `omx team \.\.\.`/);
+      assert.match(JSON.stringify(result.outputJson), /If you need help, run `omx team --help`\./);
+
+      const state = JSON.parse(
+        await readFile(join(cwd, ".omx", "state", "team-state.json"), "utf-8"),
+      ) as { mode?: string; active?: boolean; current_phase?: string };
+      assert.equal(state.mode, "team");
+      assert.equal(state.active, true);
+      assert.equal(state.current_phase, "starting");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("returns a destructive-command caution on PreToolUse for rm -rf dist", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-danger-"));
     try {

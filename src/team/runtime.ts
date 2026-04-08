@@ -103,7 +103,7 @@ import {
 import { loadRolePrompt } from './role-router.js';
 import { composeRoleInstructionsForRole } from '../agents/native-config.js';
 import { codexPromptsDir } from '../utils/paths.js';
-import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
+import { isTerminalPhase, type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
   resolveTeamWorkerLaunchArgs,
   TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
@@ -203,6 +203,35 @@ async function syncRootTeamModeStateOnTerminalPhase(
   } catch {
     // Best-effort compatibility sync only.
   }
+}
+
+async function assertTeamStartupIsNonDestructive(
+  teamName: string,
+  cwd: string,
+  leaderSessionId: string,
+): Promise<void> {
+  const activeTeams = await findActiveTeams(cwd, leaderSessionId);
+  if (activeTeams.length > 0) {
+    throw new Error(`leader_session_conflict: active team exists (${activeTeams.join(', ')})`);
+  }
+
+  const [existingConfig, existingManifest, existingPhase] = await Promise.all([
+    readTeamConfig(teamName, cwd),
+    readTeamManifestV2(teamName, cwd),
+    readTeamPhaseState(teamName, cwd),
+  ]);
+
+  if (!existingConfig && !existingManifest) return;
+
+  const currentPhase = existingPhase?.current_phase;
+  if (currentPhase && isTerminalPhase(currentPhase)) return;
+
+  const tmuxSession = existingConfig?.tmux_session ?? existingManifest?.tmux_session ?? `omx-team-${teamName}`;
+  const renderedPhase = currentPhase ?? 'team-exec';
+  throw new Error(
+    `team_name_conflict: active team state already exists for "${teamName}" (phase: ${renderedPhase}, tmux: ${tmuxSession}). `
+    + `Use "omx team status ${teamName}", "omx team resume ${teamName}", or "omx team shutdown ${teamName}" instead of launching a duplicate team.`,
+  );
 }
 
 /** Runtime handle returned by startTeam */
@@ -1705,6 +1734,10 @@ export async function startTeam(
   const leaderCwd = resolve(cwd);
   await assertNestedTeamAllowed(leaderCwd);
   const effectiveWorktreeMode = resolveEffectiveTeamWorktreeMode(leaderCwd, options.worktreeMode);
+  const sanitized = sanitizeTeamName(teamName);
+  const leaderSessionId = await resolveLeaderSessionId(leaderCwd);
+
+  await assertTeamStartupIsNonDestructive(sanitized, leaderCwd, leaderSessionId);
 
   const workerLaunchMode = resolveTeamWorkerLaunchMode(process.env);
   const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
@@ -1717,7 +1750,6 @@ export async function startTeam(
     }
   }
 
-  const sanitized = sanitizeTeamName(teamName);
   const teamStateRoot = resolveCanonicalTeamStateRoot(leaderCwd);
   const activeWorktreeMode: 'detached' | 'named' | null =
     effectiveWorktreeMode.enabled
@@ -1761,14 +1793,6 @@ export async function startTeam(
         });
       }
     }
-  }
-
-  const leaderSessionId = await resolveLeaderSessionId(leaderCwd);
-
-  // Topology guard: one active team per leader session/process context.
-  const activeTeams = await findActiveTeams(leaderCwd, leaderSessionId);
-  if (activeTeams.length > 0) {
-    throw new Error(`leader_session_conflict: active team exists (${activeTeams.join(', ')})`);
   }
 
   // 2. Team name is already sanitized above.

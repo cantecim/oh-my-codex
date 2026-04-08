@@ -77,12 +77,13 @@ export const DEEP_INTERVIEW_STATE_FILE = 'deep-interview-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'] as const;
 export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.';
 
-type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultrawork' | 'ultraqa';
+type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultrawork' | 'ultraqa' | 'team';
 
 interface StatefulSkillSeedConfig {
   mode: StatefulSkillMode;
   initialPhase: string;
   includeIteration?: boolean;
+  scope?: 'session' | 'root';
 }
 
 const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedConfig> = {
@@ -90,6 +91,7 @@ const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedCon
   autopilot: { mode: 'autopilot', initialPhase: 'planning' },
   ralph: { mode: 'ralph', initialPhase: 'starting', includeIteration: true },
   ralplan: { mode: 'ralplan', initialPhase: 'planning' },
+  team: { mode: 'team', initialPhase: 'starting', scope: 'root' },
   ultrawork: { mode: 'ultrawork', initialPhase: 'planning' },
   ultraqa: { mode: 'ultraqa', initialPhase: 'planning' },
 };
@@ -217,11 +219,16 @@ async function persistDeepInterviewModeState(
   await writeFile(statePath, JSON.stringify(nextState, null, 2));
 }
 
-function resolveSeedStateFilePath(stateDir: string, mode: StatefulSkillMode, sessionId?: string): {
+function resolveSeedStateFilePath(
+  stateDir: string,
+  mode: StatefulSkillMode,
+  sessionId?: string,
+  scope: 'session' | 'root' = 'session',
+): {
   absolutePath: string;
   relativePath: string;
 } {
-  if (sessionId?.trim()) {
+  if (scope !== 'root' && sessionId?.trim()) {
     return {
       absolutePath: join(stateDir, 'sessions', sessionId, `${mode}-state.json`),
       relativePath: `.omx/state/sessions/${sessionId}/${mode}-state.json`,
@@ -247,14 +254,22 @@ async function persistStatefulSkillSeedState(
     stateDir,
     config.mode,
     nextSkill.session_id,
+    config.scope,
   );
   const existingModeState = await readJsonStateIfExists(absolutePath);
   const sameActiveSkill = previousSkill?.skill === nextSkill.skill && previousSkill.active;
-  const preserveExistingModeState = sameActiveSkill
-    && safeString(existingModeState?.mode).trim() === config.mode
-    && safeString(existingModeState?.current_phase).trim() !== '';
+  const existingModeMatches = safeString(existingModeState?.mode).trim() === config.mode;
+  const existingPhase = safeString(existingModeState?.current_phase).trim();
+  const preserveExistingModeState = existingModeMatches
+    && existingPhase !== ''
+    && (
+      sameActiveSkill
+      || (config.mode === 'team' && existingModeState?.active === true)
+    );
   const startedAt = previousSkill?.skill === nextSkill.skill && previousSkill.active
     ? safeString(existingModeState?.started_at).trim() || previousSkill.activated_at || nowIso
+    : preserveExistingModeState
+      ? safeString(existingModeState?.started_at).trim() || nowIso
     : nowIso;
 
   const baseState: Record<string, unknown> = {
@@ -262,7 +277,7 @@ async function persistStatefulSkillSeedState(
     active: true,
     mode: config.mode,
     current_phase: preserveExistingModeState
-      ? safeString(existingModeState?.current_phase).trim() || config.initialPhase
+      ? existingPhase || config.initialPhase
       : config.initialPhase,
     started_at: startedAt,
     updated_at: nowIso,
